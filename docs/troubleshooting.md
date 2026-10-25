@@ -13,8 +13,10 @@ opencode plugin list
 应出现：
 
 ```
-opencode-ds-purge    local    C:\Users\…\.config\opencode\plugins\opencode-ds-purge.js
+opencode-ds-purge    local    /home/you/.config/opencode/plugins/opencode-ds-purge.js
 ```
+
+> 刚重启完服务时它可能还没出现在列表里，等几秒再跑。
 
 没有的话看日志：
 
@@ -27,6 +29,14 @@ Select-String -Path "$env:USERPROFILE\.local\share\opencode\log\opencode.log" -P
 # macOS / Linux
 grep -E "loading plugin|failed to load" ~/.local/share/opencode/log/opencode.log | tail -20
 ```
+
+确认它真的在加载记录里、以及它排在第几个：
+
+```bash
+grep -a "loading plugin" ~/.local/share/opencode/log/opencode.log | tail -6 | sed -E 's/.*id=([^ ]+) .*/\1/'
+```
+
+输出是执行顺序。如果你的插件在 `oh-my-opencode-slim` **前面**，说明它会被覆盖——见第二节。
 
 ### 常见加载失败
 
@@ -194,7 +204,28 @@ late 阶段的记录写在 `ds-purge.json.late.json`，带 `report.slots`（在�
 
 ---
 
-## 六、其他
+## 六、装完还是不生效：按顺序查这五条
+
+这是最常被问的「为什么装了没用」，按序号排查，第 1 条占八成。
+
+**1. `prepend` 是空的。** 打开 `~/.config/opencode/ds-purge.json`，看 `prepend` 有没有内容。空的配置把宿主身份句删了却不补任何东西——按 [实测](findings.md)，这会让拒绝**更多**，不是更少。`install.mjs` 会对此告警。
+
+**2. 在旧会话里试的。** 重启服务只重载插件，不会重写已经存在的会话。**新开一个对话。**
+
+**3. 有竞争者插件。** 跑 `node check.mjs`，看 `contenders` 这一行。有输出就要 `late: true` + `lateMode: "prepend"`。`install.mjs` 检测到会自动换成 `with-omo` 配置。
+
+**4. 配置没被读到。** 配置在 `setup` 时读一次，改完必须 `opencode service restart`。确认路径：
+
+```bash
+node check.mjs     # 打印 config dir
+cat <config dir>/ds-purge.json
+```
+
+**5. 规则没命中。** 配 `"dump": "/tmp/x.json"` 跑一轮，看 `report` 里是不是全是 0。
+
+---
+
+## 七、其他
 
 **它说自己是「工具」不是角色**
 

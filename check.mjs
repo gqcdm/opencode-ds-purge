@@ -20,6 +20,41 @@ function run(cmd, args) {
   return result.status === 0 ? (result.stdout ?? "").trim() : null
 }
 
+// Reads the plugin array from opencode's own config, so the installer can tell
+// whether a hook-contending plugin (one that registers its own "context" hook)
+// is around. oh-my-opencode-slim is the one that re-injects an orchestrator
+// prompt after a plain context hook has already run.
+const CONTENDERS = [
+  { match: /oh-my-opencode/i, name: "oh-my-opencode-slim", preset: "--with-omo" },
+  { match: /opencode-dcp/i, name: "opencode-dcp", preset: null },
+]
+
+export function pluginDeclarations(configDir) {
+  const names = []
+  for (const file of ["opencode.json", "opencode.jsonc"]) {
+    const full = path.join(configDir, file)
+    if (!fs.existsSync(full)) continue
+    try {
+      const raw = fs
+        .readFileSync(full, "utf8")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+      const json = JSON.parse(raw.replace(/,(\s*[}\]])/g, "$1"))
+      const list = json.plugin ?? json.plugins ?? []
+      for (const entry of Array.isArray(list) ? list : []) {
+        const name = typeof entry === "string" ? entry : Array.isArray(entry) ? entry[0] : entry?.package
+        if (typeof name === "string") names.push(name)
+      }
+    } catch {}
+  }
+  return names
+}
+
+export function contenders(configDir) {
+  const declared = pluginDeclarations(configDir)
+  return CONTENDERS.filter((c) => declared.some((name) => c.match.test(name)))
+}
+
 export function detect() {
   const version = run("opencode", ["--version"])
   const major = version ? Number((version.match(/(\d+)\.(\d+)\.(\d+)/) ?? [])[1]) : null
@@ -44,6 +79,7 @@ export function detect() {
     configDir,
     pluginDir,
     installed,
+    rivals: contenders(configDir),
     // v2 added the outbound-request hook; v1 has only the system transform,
     // which runs before other plugins can re-inject anything.
     lateSeat: generation === "v2",
@@ -60,4 +96,7 @@ if (import.meta.filename === process.argv[1]) {
   console.log(`entry shape   ${info.fromFile}`)
   console.log(`late seat     ${info.lateSeat ? "available (http.request)" : "unavailable — other plugins can still re-inject"}`)
   console.log(`installed     ${info.installed.length ? info.installed.join(", ") : "none"}`)
+  console.log(
+    `contenders    ${info.rivals.length ? info.rivals.map((r) => r.name).join(", ") + " ← they inject after a plain context hook" : "none detected"}`,
+  )
 }

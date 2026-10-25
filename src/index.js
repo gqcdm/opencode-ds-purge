@@ -197,6 +197,10 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     ...merged,
     presetName: PRESETS[merged.preset] ? merged.preset : "identity",
     modeName: merged.mode === "replace" ? "replace" : "strip",
+    // When the late seat is armed it injects prepend/append on its own. Doing
+    // it here as well would put the text in twice (once per stage), which the
+    // model reads as two separate instructions.
+    injectInContext: merged.late !== true,
     replaceKeep: Array.isArray(merged.replaceKeep) ? merged.replaceKeep.map(String) : [],
     lateMode: merged.lateMode === "prepend" || merged.lateMode === "replace" ? merged.lateMode : "inherit",
     lateAgents: Array.isArray(merged.lateAgents) ? merged.lateAgents.map(String) : [],
@@ -371,8 +375,12 @@ export function purgeSystem(parts, cfg, meta = {}) {
 
   const prepend = (cfg.prepend ?? "").trim()
   const append = (cfg.append ?? "").trim()
-  if (prepend) next.unshift({ type: "text", text: prepend })
-  if (append) next.push({ type: "text", text: append })
+  // injectInContext is false whenever the late seat is armed: late injects on
+  // the finished request body, and doing it here too would duplicate the text.
+  if (cfg.injectInContext !== false) {
+    if (prepend) next.unshift({ type: "text", text: prepend })
+    if (append) next.push({ type: "text", text: append })
+  }
 
   return { parts: next, report }
 }

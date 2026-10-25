@@ -86,11 +86,11 @@ git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && 
 git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge "$env:TEMP\ds-purge"; node "$env:TEMP\ds-purge\install.mjs"; opencode service restart
 ```
 
-配合 `oh-my-opencode-slim` 时给 `install.mjs` 加 `--with-omo`：
+`install.mjs` 会读你的 `opencode.json`：检测到 `oh-my-opencode-slim` 这类会在你之后注入的插件，就自动换成 `with-omo` 配置（只插不删、只作用于 orchestrator），不用你手写 `--with-omo`。
 
-```bash
-git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs --with-omo && opencode service restart
-```
+装完它会检查最终写下的配置并告警：`prepend` 为空（那会让拒绝**更**容易，不是更少）、有竞争者却没开 `lateMode: "prepend"`、`[名字]` 占位符没改。
+
+> **装完必须新开一个对话。** 重启服务只重载插件，不会重写已经存在的会话。
 
 > 重复安装会撞上 `destination path already exists`。用 `git -C /tmp/ds-purge pull` 更新，或者先删掉目录再跑。
 
@@ -110,12 +110,15 @@ opencode plugin list           # 应出现 opencode-ds-purge  local
 ```
 opencode      opencode v2.1.4
 generation    v2
-config dir    C:\Users\…\.config\opencode
-plugin dir    C:\Users\…\.config\opencode\plugins
+config dir    /home/gqcdm/.config/opencode
+plugin dir    /home/gqcdm/.config/opencode/plugins
 entry shape   default { id, setup }
 late seat     available (http.request)
 installed     opencode-ds-purge.js
+contenders    oh-my-opencode-slim, opencode-dcp ← they inject after a plain context hook
 ```
+
+`contenders` 那一行很关键。它列出的插件会注册自己的 `context` 钩子并在你之后执行——不处理就会被覆盖。
 
 ### 手动
 
@@ -255,10 +258,12 @@ designer 等   不被改（lateAgents 拦住）
 
 | 症状 | 原因 | 解法 |
 | --- | --- | --- |
+| 装完还是不叫 | **配置里没有 `prepend`** | 空身份槽位会让拒绝更多。写 `prepend` |
 | 没效果，像没装 | 别的插件在你之后注入 | `late: true` + `lateMode: "prepend"` |
 | 它说自己是「工具」不是角色 | 身份槽位空了 | 写 `prepend`，别留空 |
 | omo 的编队瘫了 | `replace` 丢了它的提示词 | 换 `with-omo.json` |
 | 改了配置没反应 | 配置只在 `setup` 时读 | `opencode service restart` |
+| 还是没反应 | **在同一条会话里试的** | 必须**新开一个对话** |
 | 插件目录报 `failed to load` | 目录里放了第二个文件 | 只留 `opencode-ds-purge.js` |
 | 想看清实际发了什么 | — | 配 `"dump": "/tmp/x.json"` |
 

@@ -95,7 +95,8 @@ test("dropParts removes a whole system part", () => {
 })
 
 test("prepend and append inject text around the surviving prompt", () => {
-  const cfg = cfgFor({ preset: "identity", prepend: "PREFIX", append: "SUFFIX" })
+  // late off, so the context hook owns the injection
+  const cfg = cfgFor({ preset: "identity", late: false, prepend: "PREFIX", append: "SUFFIX" })
   const { parts } = purgeSystem([{ type: "text", text: "# A\nx" }], cfg, { agent: "build" })
   assert.deepEqual(
     parts.map((p) => p.text),
@@ -483,6 +484,29 @@ test("v1 and v2 purge the same strings the same way", async () => {
   assert.deepEqual(out.system, v2.parts.map((p) => p.text))
 })
 
+test("prepend is injected once, not once per stage", () => {
+  // Regression: with strip + late prepend, the context hook and the late hook
+  // both used to inject, so the model saw the text twice ("ME\n\nME").
+  const cfg = cfgFor({ mode: "strip", preset: "identity", late: true, lateMode: "prepend", prepend: "ME" })
+
+  const ctx = purgeSystem([{ type: "text", text: "# Rules\nbe nice" }], cfg, { agent: "orchestrator" })
+  assert.equal(ctx.parts.some((p) => p.text === "ME"), false, "context hook must leave injection to late")
+
+  const body = { messages: ctx.parts.map((p) => ({ role: "system", content: p.text })) }
+  rewriteBody(body, cfg, { agent: "orchestrator" }, "prepend")
+
+  const joined = body.messages.map((m) => m.content).join("\n")
+  assert.equal(joined.split("ME").length - 1, 1)
+  assert.match(joined, /^ME\n\n# Rules/)
+})
+
+test("with late off, the context hook still injects on its own", () => {
+  const cfg = cfgFor({ mode: "strip", preset: "identity", late: false, prepend: "ME" })
+  const { parts } = purgeSystem([{ type: "text", text: "# Rules\nkeep" }], cfg, { agent: "build" })
+  assert.equal(parts[0].text, "ME")
+  assert.match(parts[1].text, /keep/)
+})
+
 // The identity slot does not stay neutral once its sentence is gone: whatever
 // text survives defines how the model refers to itself. These lock the two
 // shapes the plugin can put there, so a future rule change cannot silently
@@ -491,14 +515,19 @@ for (const name of ["persona", "silent"]) {
   test(`examples/${name}.json parses and dominates the identity slot`, () => {
     const raw = fs.readFileSync(path.join(here, "..", "examples", `${name}.json`), "utf8")
     const cfg = resolveConfig({ options: parseJsonc(raw), projectDir: here, homeDir: "/nonexistent" })
-    const { parts, report } = purgeSystem([{ type: "text", text: fixture }], cfg, { agent: "build" })
 
-    const joined = parts.map((p) => p.text ?? "").join("\n")
+    // exercise the real two-stage flow: context hook, then the late seat
+    const ctx = purgeSystem([{ type: "text", text: fixture }], cfg, { agent: "build" })
+    const body = { messages: ctx.parts.map((p) => ({ role: "system", content: p.text ?? "" })) }
+    rewriteBody(body, cfg, { agent: "build" }, cfg.lateMode === "inherit" ? cfg.modeName : cfg.lateMode)
+
+    const joined = body.messages.map((m) => m.content).join("\n")
     assert.equal(joined.includes("You are opencode"), false)
     assert.ok(
-      report.sections.length + report.paragraphs.length + report.lines.length > 0,
+      ctx.report.sections.length + ctx.report.paragraphs.length + ctx.report.lines.length > 0,
       "config should actually remove something",
     )
-    assert.equal(parts[0].text, cfg.prepend.trim())
+    assert.equal(body.messages[0].content.startsWith(cfg.prepend.trim()), true, "prepend must lead")
+    assert.equal(joined.split(cfg.prepend.trim()).length - 1, 1, "prepend must appear once")
   })
 }

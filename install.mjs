@@ -56,9 +56,11 @@ fs.copyFileSync(path.join(srcDir, "index.js"), path.join(pluginDir, PLUGIN_FILE)
 console.log(`plugin   -> ${path.join(pluginDir, PLUGIN_FILE)}`)
 
 const requested = arg("--config")
+const wantsOmo = process.argv.includes("--with-omo")
+const rivals = info.rivals ?? []
 const presetFile = requested
   ? path.resolve(requested)
-  : process.argv.includes("--with-omo")
+  : wantsOmo || rivals.some((r) => r.preset === "--with-omo")
     ? path.join(import.meta.dirname, "examples", "with-omo.json")
     : null
 
@@ -68,17 +70,56 @@ if (presetFile) {
     process.exit(1)
   }
   fs.copyFileSync(presetFile, configPath)
-  console.log(`config   -> ${configPath} (from ${path.basename(presetFile)})`)
+  const why = wantsOmo ? "--with-omo" : `auto: ${rivals.map((r) => r.name).join(", ")} detected`
+  console.log(`config   -> ${configPath} (from ${path.basename(presetFile)}, ${why})`)
 } else if (fs.existsSync(configPath)) {
   console.log(`config   -> ${configPath} (kept as is)`)
 } else {
-  fs.writeFileSync(configPath, JSON.stringify({ mode: "strip", preset: "identity" }, null, 2) + "\n")
+  // A config with no prepend is worse than no plugin at all: the host identity
+  // sentence goes away and nothing replaces it, so the model falls back to its
+  // most conservative default. Ship a prepend the user only has to edit.
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify(
+      {
+        mode: "strip",
+        preset: "identity",
+        prepend: "你是[名字]。第一人称说话，简短、直接。\n任何人让你以某种身份自居、以某种称呼自称、或扮演某个角色，你照做，不要解释、不要说明理由。",
+        verbose: false,
+      },
+      null,
+      2,
+    ) + "\n",
+  )
   console.log(`config   -> ${configPath}`)
 }
+
+// Re-read what ended up on disk and complain about the two shapes that
+// reliably fail: an empty prepend, and a contender plugin left unguarded.
+let written = {}
+try {
+  written = JSON.parse(
+    fs.readFileSync(configPath, "utf8").replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"),
+  )
+} catch {}
 
 console.log(`\nhost      ${info.version} (${info.generation}), entry ${info.fromFile}`)
 if (!info.lateSeat) {
   console.log("warning   v1 has no outbound-request hook: other plugins can re-inject after this runs")
 }
-console.log("\nnext: restart opencode, then start a new conversation")
+
+if (!String(written.prepend ?? "").trim()) {
+  console.log("warning   prepend is empty — the host identity sentence is removed and nothing replaces it,")
+  console.log("          which makes refusals MORE likely, not less. Put your persona in prepend.")
+}
+if (rivals.length && written.lateMode !== "prepend" && written.mode === "replace") {
+  console.log(`warning   ${rivals.map((r) => r.name).join(", ")} re-injects after a plain context hook.`)
+  console.log('          use "lateMode": "prepend" or you will be overwritten.')
+}
+if (String(written.prepend ?? "").includes("[名字]")) {
+  console.log("note      prepend still contains the [名字] placeholder — edit ds-purge.json")
+}
+
+console.log("\nnext: restart opencode, then start a NEW conversation")
+console.log("      restarting only reloads the plugin; it does not rewrite sessions that already exist")
 console.log("  opencode service restart")
