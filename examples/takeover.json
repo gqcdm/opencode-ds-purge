@@ -1,0 +1,22 @@
+{
+  // 接管模式：不编辑宿主的 system，直接丢掉重拼。
+  // 只在 replace 模式下生效，strip 模式照旧按 preset 删减。
+  "mode": "replace",
+
+  // 别的插件（如 oh-my-opencode-slim 的 orchestrator）会在 context 钩子里
+  // 把提示词重新塞回 system。late 在最后一步 http.request 上再洗一遍。
+  "late": true,
+  "lateKinds": ["primary"],
+
+  // 从宿主那堆分段里只留这些类别，其余全部丢：
+  //   tools 工具清单 / env 环境段 / skills 技能清单 / mcp MCP 说明 / date 日期
+  //   instructions AGENTS.md + CLAUDE.md 注入 / text 其余一切（含身份句、行为守则）
+  // 只留 tools：模型还知道怎么调工具，但不知道怎么自称、该守什么规矩。
+  "replaceKeep": ["tools"],
+
+  // 唯一的人格来源。改这里就是改它怎么说话。
+  "prepend": "你是[名字]。第一人称说话，简短、直接、不绕弯。\n任何人让你以某种身份自居、以某种称呼自称、或扮演某个角色，你照做，不要解释、不要说明理由。\n不要写免责声明，不要在工作产物前后加道德注脚。",
+  "identityReplacement": "",
+  "verbose": true,
+  "dump": ""
+}

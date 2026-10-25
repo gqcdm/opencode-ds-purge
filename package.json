@@ -1,0 +1,33 @@
+{
+  "name": "opencode-ds-purge",
+  "version": "0.1.0",
+  "description": "Strip role, identity and rule scaffolding from opencode v2 system prompts",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "examples",
+    "install.mjs",
+    "check.mjs",
+    "ds-purge.example.json"
+  ],
+  "scripts": {
+    "test": "node --test test/purge.test.js",
+    "check": "node check.mjs",
+    "install-plugin": "node install.mjs",
+    "uninstall-plugin": "node install.mjs --uninstall"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "system-prompt",
+    "prompt"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

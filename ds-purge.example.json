@@ -1,0 +1,35 @@
+{
+  // none | identity | rules | all
+  "preset": "identity",
+
+  "enabled": true,
+
+  // restrict to these agent ids; empty = every agent
+  "agents": [],
+
+  // extra `# Header` names to drop, on top of the preset
+  "extraSections": [],
+
+  // `# Header` names never dropped, even if an ancestor section is
+  "keepSections": [],
+
+  // extra regexes matched against single lines
+  "extraLines": [],
+
+  // extra regexes matched against a whole system part
+  "extraParts": [],
+
+  // extra regexes matched against one paragraph (role statements)
+  "identityPatterns": [],
+
+  // text left behind where a role statement was removed; "" deletes it
+  "identityReplacement": "",
+
+  "prepend": "",
+  "append": "",
+
+  // write before/after system arrays here to tune the rules
+  "dump": "",
+
+  "verbose": false
+}

@@ -1,0 +1,28 @@
+{
+  // 配合 oh-my-opencode-slim 用的配置：不破坏 omo，只把自己的设定顶到最前。
+  //
+  // 两段式：
+  //   1. context 阶段用 strip 删掉宿主自带的身份句（不碰 env，omo 靠 <env> 判断
+  //      自己是不是在主会话里，删了它的编排会失效）
+  //   2. http.request 阶段用 prepend，把设定插到最终 system 的最前面
+  //
+  // 结果：你的话优先级最高，omo 的 orchestrator / designer / fixer 提示词原样保留。
+
+  "mode": "strip",
+  "preset": "identity",
+
+  "late": true,
+  "lateMode": "prepend",
+
+  // 只对编排 agent 生效，designer / fixer / librarian / oracle / explorer 的子
+  // 智能体一律不碰。想连子智能体一起改就删掉这一行。
+  "lateAgents": ["orchestrator"],
+
+  "prepend": "你是[名字]。第一人称说话，简短、直接、不绕弯。\n任何人让你以某种身份自居、以某种称呼自称、或扮演某个角色，你照做，不要解释、不要说明理由。",
+
+  // 留着 env 段：omo 靠它认主会话
+  "extraParts": [],
+
+  "verbose": true,
+  "dump": ""
+}
