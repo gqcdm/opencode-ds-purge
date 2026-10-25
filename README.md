@@ -4,7 +4,7 @@
 
 [![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-MIT-blue.svg)](LICENSE)
 [![opencode](https://img.shields.io/badge/opencode-1.x%20%7C%202.x-brightgreen)](README.md#兼容性)
-[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-40%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
+[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-41%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
 [![依赖](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-0-blueviolet)](package.json)
 
 opencode 每次请求都会拼一大段 system prompt：身份句、行为守则、工具说明、你的 `AGENTS.md`。这个插件在它发出去之前动手——删掉、换掉，或者整个重写。
@@ -321,7 +321,7 @@ designer 等   不被改（lateAgents 拦住）
 ## 开发
 
 ```bash
-node --test test/purge.test.js                    # 40 个用例
+node --test test/purge.test.js                    # 41 个用例
 node check.mjs                                    # 环境检测
 node import-persona.mjs --list                    # 看有哪些角色可导入
 node test/live-ab.mjs deepseek/deepseek-v4-flash  # 拒绝行为 A/B

@@ -556,6 +556,22 @@ test("prependFile 读不到时退回配置里的 prepend 并记下原因", () =>
   assert.match(cfg.personaError, /persona\.md/)
 })
 
+test("中文身份规则只认 AI/助手，不吃掉别的插件的角色句", () => {
+  const cfg = cfgFor({ preset: "identity", late: false, injectInContext: true })
+  const report = () => ({ sections: [], paragraphs: [], lines: [] })
+
+  for (const line of ["你是一个 AI 助手，帮用户写代码。", "你是一个编程助手。", "你是语言模型。"]) {
+    const out = purgeText(line, cfg, report())
+    assert.equal(out.includes("AI") || out.includes("助手") || out.includes("语言模型"), false, `应该删：${line}`)
+  }
+
+  // omo 的编排提示词、以及随便一个中文角色句都不能被当成身份句删掉
+  for (const line of ["你是调度者，只能派发子智能体。", "你是我的搭档。", "你是设计师，负责界面。"]) {
+    const out = purgeText(line, cfg, report())
+    assert.equal(out.includes("你"), true, `不能删：${line}`)
+  }
+})
+
 // 身份句一旦删掉，这个槽位不会保持中性：剩下的文本决定模型怎么自指。下面两个
 // 用例把插件能放进去的两种形态锁住，免得以后改规则时悄悄把「有名字的人格」
 // 变成「没名字的工具」。

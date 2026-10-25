@@ -72,7 +72,10 @@ const IDENTITY_PATTERNS = [
   /^\s*You are (?:a|an) [^.\n]{0,80}\b(?:AI|A\.I\.|assistant|language model|agent|coding agent|CLI tool)\b/i,
   /^\s*(?:Your name is|You are called|You go by)\b/i,
   /^\s*You are (?:Claude Code|Claude|ChatGPT|GPT-?\d|Gemini|DeepSeek|Kimi|GLM|Qwen|Llama)\b/i,
-  /^\s*你(?:是|叫|的名字是)/,
+  // 中文这条必须收窄：只认「你是 + AI/助手/模型」这类，不能见「你是」就删。
+  // 放宽到 /^你是/ 会把别的插件写的「你是调度者」整段吃掉。
+  /^\s*你(?:是|叫|的名字是)[^。\n]{0,20}?(?:AI|人工智能|助手|语言模型|大模型|机器人)/,
+  /^\s*你(?:是|叫)\s*(?:Claude|ChatGPT|GPT|Gemini|DeepSeek|Kimi|GLM|通义|文心|豆包)/i,
 ]
 
 // AGENTS.md / CLAUDE.md 是作为一个 system 分段注入的，优先级比宿主提示词更高：
