@@ -15,6 +15,33 @@ import path from "node:path"
 
 export const PLUGIN_ID = "opencode-ds-purge"
 
+// ------------------------------------------------------------- 人格文件
+
+// 从 markdown 读取一整段人格设定。三个常见包装按顺序剥掉：
+//   --- YAML frontmatter ---
+//   <|im_start|>system:... 这类 harness 标记
+//   <project_instructions> / </project_instructions> 之类的外壳标签
+export function readPersonaFile(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, "utf8")
+  } catch (err) {
+    return { error: `${file}: ${err?.message ?? err}` }
+  }
+
+  text = text.replace(/^\uFEFF/, "")
+  const frontmatter = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)
+  if (frontmatter) text = text.slice(frontmatter[0].length)
+
+  text = text
+    .replace(/^\s*<\|im_start\|>[^\n]*\n?/m, "")
+    .replace(/<\|im_end\|>\s*$/m, "")
+    .replace(/<\/?(?:project_instructions|system|instructions)>\s*\n?/gi, "")
+
+  text = text.trim()
+  return { text, bytes: Buffer.byteLength(text) }
+}
+
 // ---------------------------------------------------------------- 预设
 
 const SECTIONS_RULES = [
@@ -84,6 +111,7 @@ export const DEFAULTS = {
   identityReplacement: "",
   extraParts: [],
   prepend: "",
+  prependFile: "",
   append: "",
   dump: "",
   verbose: false,
@@ -193,8 +221,26 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     ...asRegExpList(merged.identityPatterns),
   ]
 
+  // prepend 可以是配置里直接写的短句，也可以由 prependFile 指向一整个 markdown
+  // 人格文件。文件存在就以文件为准（那是完整设定），配置里的 prepend 只在文件
+  // 读不到时兜底，免得两段人格同时生效互相打架。
+  let persona = String(merged.prepend ?? "")
+  let personaError = ""
+  let personaBytes = Buffer.byteLength(persona)
+  if (merged.prependFile) {
+    const loaded = readPersonaFile(merged.prependFile)
+    if (loaded.error) personaError = loaded.error
+    else if (loaded.text) {
+      persona = loaded.text
+      personaBytes = loaded.bytes
+    }
+  }
+
   return {
     ...merged,
+    prepend: persona,
+    personaError,
+    personaBytes,
     presetName: PRESETS[merged.preset] ? merged.preset : "identity",
     modeName: merged.mode === "replace" ? "replace" : "strip",
     // late 座位启用后，prepend / append 由它自己注入。这里再注入一次会让文本

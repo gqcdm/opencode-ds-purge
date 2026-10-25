@@ -10,6 +10,7 @@ import plugin, {
   parseJsonc,
   purgeSystem,
   purgeText,
+  readPersonaFile,
   resolveConfig,
   rewriteBody,
   stripSections,
@@ -504,6 +505,55 @@ test("关闭 late 时，context 钩子自己完成注入", () => {
   const { parts } = purgeSystem([{ type: "text", text: "# Rules\nkeep" }], cfg, { agent: "build" })
   assert.equal(parts[0].text, "ME")
   assert.match(parts[1].text, /keep/)
+})
+
+test("readPersonaFile 剥掉 YAML 头和 harness 包装", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "persona-"))
+  const file = path.join(dir, "p.md")
+  fs.writeFileSync(
+    file,
+    [
+      "---",
+      "name: 测试角色",
+      "description: 用来测试的",
+      "---",
+      "",
+      "<|im_start|>system:<project_instructions>",
+      "",
+      "你是测试角色，第一人称说话。",
+      "</project_instructions>",
+      "",
+    ].join("\n"),
+  )
+
+  const { text, bytes } = readPersonaFile(file)
+  assert.equal(text.includes("name: 测试角色"), false, "YAML 头要去掉")
+  assert.equal(text.includes("im_start"), false, "harness 标记要去掉")
+  assert.equal(text.includes("project_instructions"), false, "外壳标签要去掉")
+  assert.match(text, /^你是测试角色/)
+  assert.equal(bytes, Buffer.byteLength(text))
+})
+
+test("prependFile 指向的文件优先于配置里的 prepend", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "persona-"))
+  const file = path.join(dir, "p.md")
+  fs.writeFileSync(file, "---\nname: x\n---\n\n文件里的整段人格")
+
+  const cfg = cfgFor({ prepend: "配置里的短句", prependFile: file })
+  assert.equal(cfg.prepend, "文件里的整段人格")
+  assert.equal(cfg.personaError, "")
+  assert.ok(cfg.personaBytes > 0)
+
+  const { parts } = purgeSystem([{ type: "text", text: "# A\nx" }], { ...cfg, late: false, injectInContext: true }, {
+    agent: "build",
+  })
+  assert.equal(parts[0].text, "文件里的整段人格")
+})
+
+test("prependFile 读不到时退回配置里的 prepend 并记下原因", () => {
+  const cfg = cfgFor({ prepend: "兜底", prependFile: "/nonexistent/persona.md" })
+  assert.equal(cfg.prepend, "兜底")
+  assert.match(cfg.personaError, /persona\.md/)
 })
 
 // 身份句一旦删掉，这个槽位不会保持中性：剩下的文本决定模型怎么自指。下面两个

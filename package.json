@@ -1,7 +1,7 @@
 {
   "name": "opencode-ds-purge",
-  "version": "0.1.0",
-  "description": "在请求发出之前，重写 opencode 拼给模型的 system prompt：摘掉角色设定、身份句和行为守则",
+  "version": "0.2.0",
+  "description": "在请求发出之前，重写 opencode 拼给模型的 system prompt：摘掉角色设定、身份句和行为守则，换成你自己的人格",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -13,11 +13,13 @@
     "examples",
     "install.mjs",
     "check.mjs",
+    "import-persona.mjs",
     "ds-purge.example.json"
   ],
   "scripts": {
     "test": "node --test test/purge.test.js",
     "check": "node check.mjs",
+    "import-persona": "node import-persona.mjs",
     "install-plugin": "node install.mjs",
     "uninstall-plugin": "node install.mjs --uninstall"
   },

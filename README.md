@@ -4,7 +4,7 @@
 
 [![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-MIT-blue.svg)](LICENSE)
 [![opencode](https://img.shields.io/badge/opencode-1.x%20%7C%202.x-brightgreen)](README.md#兼容性)
-[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-37%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
+[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-40%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
 [![依赖](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-0-blueviolet)](package.json)
 
 opencode 每次请求都会拼一大段 system prompt：身份句、行为守则、工具说明、你的 `AGENTS.md`。这个插件在它发出去之前动手——删掉、换掉，或者整个重写。
@@ -29,6 +29,7 @@ git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && 
 
 - 只装插件。不要扫描磁盘、不要改 `opencode.jsonc`、不要动别的插件、不要装进别的 profile。
 - 用户装了 `oh-my-opencode-slim` 就加 `--with-omo`（否则会被它的 orchestrator 提示词覆盖）。
+- 用户想要完整人格而不仅换口气：`node import-persona.mjs`。别自己编人设。
 - 装完核对 `opencode plugin list` 里有 `opencode-ds-purge  local`，然后停，报告结果。
 - 用户问「为什么不立刻生效」：必须**新开一个对话**。重启服务只重载插件，不会重写已有会话。
 
@@ -47,6 +48,15 @@ git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && 
 ```
 
 装完先看 [配置](#配置)。那里决定它到底怎么说话，**`prepend` 是唯一真正重要的那一项**——删干净不会让它更听话，只会让它不知道自己是谁。
+
+想把 Deva 里那个角色整个搬过来：
+
+```bash
+node import-persona.mjs 小码酱
+opencode service restart
+```
+
+它会从 `~/.deva/personas/` 读原文，剥掉 YAML 头和 harness 包装，整段写进 `persona.md` 并把配置指过去。66 字的短句只会让它换个口气；29KB 的完整人格才会让它按那套方式干活。
 
 实测数据和翻车记录：[实测记录](docs/findings.md)。
 
@@ -152,6 +162,7 @@ opencode.jsonc 里插件条目的 options         显式传参
 | `mode` | `"strip"` | `strip` 删减 · `replace` 丢掉重拼 |
 | `preset` | `"identity"` | strip 模式的删减力度，见下 |
 | `prepend` | `""` | 注入到最前面的一段话——**真正决定它怎么说话的就是这个** |
+| `prependFile` | `""` | 整段人格的 markdown 文件，会盖过 `prepend` |
 | `agents` | `[]` | 只对某些 agent 生效，空 = 全部 |
 | `late` | `true` | 在出站请求上再洗一遍（别的插件抢座位时必需） |
 | `lateMode` | `"inherit"` | `inherit` / `prepend` 只插不删 / `replace` |
@@ -160,7 +171,28 @@ opencode.jsonc 里插件条目的 options         显式传参
 | `dump` | `""` | 填路径导出 before/after，调规则用 |
 | `verbose` | `false` | 打到 stderr |
 
-完整 20 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
+完整 21 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
+
+### 人格从哪来
+
+短句 `prepend` 只够改口气，**改不了水平**。实测同一句话：
+
+| prepend | 回答 |
+| --- | --- |
+| 66 字短句 | 「什么项目？说清楚点——目标、现状、卡在哪。」 |
+| 29KB 整份人格 | 拆成资产 / 路径 / 产出三段，给 2–3 条路线带成本，缺的细节用占位符补 |
+
+要把 Deva 的角色搬过来，用导入脚本：
+
+```bash
+node import-persona.mjs            # 列出角色，导入第一个
+node import-persona.mjs 小码酱      # 按名字导入
+node import-persona.mjs --file 我的角色.md
+```
+
+它从 `~/.deva/personas/` 读原文，剥掉 YAML 头和 `<|im_start|>` 包装，整段写进 `<配置目录>/persona.md`，再把配置里的 `prependFile` 指过去。`DEVA_HOME` 能改来源位置，换台机器也能用。
+
+自己写人格就照 `persona.md` 的结构：身份 → 怎么干活 → 硬约束 → 输出格式。**具体到能量化**，别写「要专业」这种没法执行的。
 
 ### 预设
 
@@ -259,6 +291,7 @@ designer 等   不被改（lateAgents 拦住）
 | 症状 | 原因 | 解法 |
 | --- | --- | --- |
 | 装完还是不叫 | **配置里没有 `prepend`** | 空身份槽位会让拒绝更多。写 `prepend` |
+| 叫是叫了，水平不对 | `prepend` 只有几句话 | 用 `import-persona.mjs` 导入整份人格 |
 | 没效果，像没装 | 别的插件在你之后注入 | `late: true` + `lateMode: "prepend"` |
 | 它说自己是「工具」不是角色 | 身份槽位空了 | 写 `prepend`，别留空 |
 | omo 的编队瘫了 | `replace` 丢了它的提示词 | 换 `with-omo.json` |
@@ -288,9 +321,11 @@ designer 等   不被改（lateAgents 拦住）
 ## 开发
 
 ```bash
-node --test test/purge.test.js    # 35 个用例
-node check.mjs                    # 环境检测
-node test/live-ab.mjs deepseek/deepseek-v4-flash   # 真实模型 A/B
+node --test test/purge.test.js                    # 40 个用例
+node check.mjs                                    # 环境检测
+node import-persona.mjs --list                    # 看有哪些角色可导入
+node test/live-ab.mjs deepseek/deepseek-v4-flash  # 拒绝行为 A/B
+node test/live-persona.mjs deepseek/deepseek-v4-flash  # 人格强度 A/B
 ```
 
 无依赖，纯 ESM。
