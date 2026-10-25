@@ -96,6 +96,13 @@ git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && 
 git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge "$env:TEMP\ds-purge"; node "$env:TEMP\ds-purge\install.mjs"; opencode service restart
 ```
 
+不想用 git 的，直接下压缩包（同一条链路，实测可用）：
+
+```bash
+curl -fsSL https://github.com/gqcdm/opencode-ds-purge/archive/refs/heads/main.tar.gz | tar xz \
+  && node opencode-ds-purge-main/install.mjs && opencode service restart
+```
+
 `install.mjs` 会读你的 `opencode.json`：检测到 `oh-my-opencode-slim` 这类会在你之后注入的插件，就自动换成 `with-omo` 配置（只插不删、只作用于 orchestrator），不用你手写 `--with-omo`。
 
 装完它会检查最终写下的配置并告警：`prepend` 为空（那会让拒绝**更**容易，不是更少）、有竞争者却没开 `lateMode: "prepend"`、`[名字]` 占位符没改。
@@ -370,6 +377,16 @@ Harness 插件，跟本仓库的 opencode 插件不是同一个宿主）。改�
 
 两边的清洗逻辑同源：标题栈、身份句识别、注入顺序都是从这份 dsh 实现里抽出来再针对 opencode 的
 钩子形态重写的。放在一个仓库里是为了改规则时能对照。
+
+dsh 那一侧单独装（要先有 DeepSeek Harness）：
+
+```bash
+git clone --depth 1 https://github.com/gqcdm/dsh-purge /tmp/dsh-purge \
+  && cd /tmp/dsh-purge && npm install && node bin/dsh-purge.js --status
+```
+
+仓库里的 `dsh-purge/` 是同一份代码的快照；它的 `dsh.install` 与自更新源都指向
+`gqcdm/dsh-purge`，所以 `dsh plugin add dsh-purge` 拉到的也是去掉门禁的版本，不会被上游覆盖回去。
 
 ## 文档
 

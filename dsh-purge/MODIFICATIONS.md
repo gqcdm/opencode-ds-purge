@@ -53,6 +53,12 @@
 人格里的旧署名统一改成「主人」（`lib/default-prompt-inject.zh.md` / `.en.md` /
 `.md.bak`、`docs/v1.1.34-prompt-inject.md`），`lib/desktop.js` 里一处注释的署名也去掉了。
 
+### 6. 安装源与自更新源指回 fork
+
+`package.json` 的 `dsh.install`（tarball / zip / git）和 `lib/update.js` 的 `REPO` 从
+`YuJunZhiXue/dsh-purge` 改成 `gqcdm/dsh-purge`。不改的话：装的是魔改版，但一键安装会拉上游的原版，
+自更新也会把 `REGION_GATE` 覆盖回 `true`。README / NOTICE 里的来源链接保持上游不变——那是署名。
+
 ## 怎么用
 
 这份是 DeepSeek Harness 插件，和仓库根目录的 `opencode-ds-purge` 不是同一个宿主：
