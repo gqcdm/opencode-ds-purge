@@ -13,6 +13,45 @@ opencode 每次请求都会拼一大段 system prompt：身份句、行为守则
 
 ---
 
+## 🤖 TO AGENT
+
+> 读到这里的是 AI agent，用户让你装这个插件 → 照下面做，别多做。
+
+**是什么**：opencode 插件，在请求发出前重写 system prompt。不改宿主文件，不碰其他配置。
+
+**装（一条命令）**：
+
+```bash
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs && opencode service restart
+```
+
+**约束**：
+
+- 只装插件。不要扫描磁盘、不要改 `opencode.jsonc`、不要动别的插件、不要装进别的 profile。
+- 用户装了 `oh-my-opencode-slim` 就加 `--with-omo`（否则会被它的 orchestrator 提示词覆盖）。
+- 装完核对 `opencode plugin list` 里有 `opencode-ds-purge  local`，然后停，报告结果。
+- 用户问「为什么不立刻生效」：必须**新开一个对话**。重启服务只重载插件，不会重写已有会话。
+
+**验证**：`opencode plugin list`。失败查 `~/.local/share/opencode/log/opencode.log` 里的 `failed to load plugin`。
+
+---
+
+## 👤 TO HUMAN
+
+这东西只做一件事：**在 opencode 把 system prompt 发给模型之前，改写它。**
+
+opencode 会告诉你「你是 opencode，一个交互式 CLI 工具」，再叠一堆行为守则，再叠你的 `AGENTS.md`。想让它换个说话的立场、换个称呼、别念那些规矩，改宿主文件很脏——这个插件让它在出口前被重写。
+
+```bash
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs && opencode service restart
+```
+
+装完先看 [配置](#配置)。那里决定它到底怎么说话，**`prepend` 是唯一真正重要的那一项**——删干净不会让它更听话，只会让它不知道自己是谁。
+
+实测数据和翻车记录：[实测记录](docs/findings.md)。
+
+---
+
 ## 它做什么
 
 宿主拼好的 6 段 system，跑 `examples/takeover.json` 之后：
@@ -33,24 +72,62 @@ core/environment      309 env        →   ✗
 core/mcp-guidance     675 mcp        →   ✗
 ```
 
-## 快速开始
+## 安装
+
+### 一行
 
 ```bash
+# macOS / Linux / Git Bash
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs && opencode service restart
+```
+
+```powershell
+# Windows PowerShell
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge "$env:TEMP\ds-purge"; node "$env:TEMP\ds-purge\install.mjs"; opencode service restart
+```
+
+配合 `oh-my-opencode-slim` 时给 `install.mjs` 加 `--with-omo`：
+
+```bash
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs --with-omo && opencode service restart
+```
+
+> 重复安装会撞上 `destination path already exists`。用 `git -C /tmp/ds-purge pull` 更新，或者先删掉目录再跑。
+
+### 分步
+
+```bash
+git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge
+cd opencode-ds-purge
 node check.mjs                 # 看这机器是 1.x 还是 2.x、插件目录在哪
-node install.mjs --with-omo    # 装插件 + 用 omo 友好配置
+node install.mjs               # 装插件 + 写默认配置
 opencode service restart       # 重载
 opencode plugin list           # 应出现 opencode-ds-purge  local
 ```
 
-不想用 omo 就去掉 `--with-omo`。卸载：
+`check.mjs` 输出：
+
+```
+opencode      opencode v2.1.4
+generation    v2
+config dir    C:\Users\…\.config\opencode
+plugin dir    C:\Users\…\.config\opencode\plugins
+entry shape   default { id, setup }
+late seat     available (http.request)
+installed     opencode-ds-purge.js
+```
+
+### 手动
+
+把 `src/index.js` 复制成 `~/.config/opencode/plugins/opencode-ds-purge.js`，重启即可。
+
+> **一个文件就够，别拆。** 插件目录里每个文件都被当成独立插件加载，多放一个辅助模块会因缺少入口被拒。
+
+### 卸载
 
 ```bash
 node install.mjs --uninstall && opencode service restart
 ```
-
-手动装也行——把 `src/index.js` 复制成 `~/.config/opencode/plugins/opencode-ds-purge.js`。
-
-> **一个文件就够，别拆。** 插件目录里每个文件都被当成独立插件加载，多放一个辅助模块会因缺少入口被拒。
 
 ## 配置
 
