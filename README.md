@@ -361,6 +361,16 @@ v0.3 起，v1 路径会自动把 `injectInContext` 打开：v1 没有 late 座�
 - **v1 注入修复**：v1 没有出站钩子，`late: true` 会把 context 注入一起关掉，人格整段丢失。现在 v1 路径强制 `injectInContext`。
 - `OPENCODE_DS_PURGE_PERSONA` 可覆盖人格文件路径。
 
+## 仓库里还有什么
+
+`dsh-purge/` 是 [YuJunZhiXue/dsh-purge](https://github.com/YuJunZhiXue/dsh-purge) 的魔改快照（DeepSeek
+Harness 插件，跟本仓库的 opencode 插件不是同一个宿主）。改动只有一件事是功能性的：`lib/net-scope.js`
+里 `REGION_GATE = false`，网段门禁和会话门禁不再注册；其余是提示词 Rule 1、界面文案、文档和称呼清理。
+逐项说明见 [`dsh-purge/MODIFICATIONS.md`](dsh-purge/MODIFICATIONS.md)，回滚只需把常量改回 `true`。
+
+两边的清洗逻辑同源：标题栈、身份句识别、注入顺序都是从这份 dsh 实现里抽出来再针对 opencode 的
+钩子形态重写的。放在一个仓库里是为了改规则时能对照。
+
 ## 文档
 
 | | |
