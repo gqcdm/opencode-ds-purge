@@ -1,35 +1,82 @@
 {
-  // none | identity | rules | all
-  "preset": "identity",
+  // 全部 20 个选项。抄一份改，放到 ~/.config/opencode/ds-purge.json
+  // jsonc 语法：注释和尾逗号都能解析。
 
   "enabled": true,
 
-  // restrict to these agent ids; empty = every agent
+  // ---------------------------------------------------------------- 模式
+
+  // strip   = 编辑宿主拼好的 system，逐段删减
+  // replace = 整个丢掉重拼，只留 replaceKeep 点名的类别
+  "mode": "strip",
+
+  // replace 模式下只保留这些类别，其余全丢：
+  //   tools 工具清单 | env 环境段 | skills 技能清单 | mcp MCP 说明
+  //   date 日期 | instructions AGENTS.md + CLAUDE.md 注入 | text 其余一切
+  "replaceKeep": [],
+
+  // strip 模式的删减力度：none | identity | rules | all
+  "preset": "identity",
+
+  // ------------------------------------------------ late 座位（出站请求）
+
+  // 别的插件（如 oh-my-opencode-slim）会在 context 钩子里把提示词重新塞回
+  // system。late 在最后一步 http.request 上再洗一遍。v1 没有这个钩子。
+  "late": true,
+
+  // inherit 跟随 mode | prepend 只插入不删除 | replace 丢掉重拼
+  "lateMode": "inherit",
+
+  // late 只作用于这些 agent，空 = 全部。
+  // 配合 omo 时建议 ["orchestrator"]，排掉 designer / fixer 等子智能体。
+  "lateAgents": [],
+
+  // late 作用在哪些请求上：primary | compaction | title | generate
+  "lateKinds": ["primary"],
+
+  // ---------------------------------------------------------------- 范围
+
+  // 只对某些 agent 生效，空 = 全部
   "agents": [],
 
-  // extra `# Header` names to drop, on top of the preset
+  // 额外摘掉 AGENTS.md 里 "You are a <普通职业>." 那种人格句。
+  // 预设的正则只认 AI / 助手 / CLI 工具，认不出这种。
+  "agentsMd": false,
+
+  // ---------------------------------------------------------------- 规则
+
+  // 额外要砍的 `# 标题` 名（正则）
   "extraSections": [],
 
-  // `# Header` names never dropped, even if an ancestor section is
+  // 保护这些标题，父段被砍也不动
   "keepSections": [],
 
-  // extra regexes matched against single lines
+  // 额外删掉的行（正则）
   "extraLines": [],
 
-  // extra regexes matched against a whole system part
+  // 额外整段丢弃的 part（正则）
   "extraParts": [],
 
-  // extra regexes matched against one paragraph (role statements)
+  // 额外当身份句处理的正则
   "identityPatterns": [],
 
-  // text left behind where a role statement was removed; "" deletes it
+  // 身份句删掉后留在原位的文本，"" = 完全删除
   "identityReplacement": "",
 
+  // ---------------------------------------------------------------- 注入
+
+  // 放到 system 最前面。真正决定它怎么说话的就是这一段。
+  // 空着不写 = 身份槽位空着 = 模型会抓住残余文本自称「工具」。
   "prepend": "",
+
+  // 追加到最后
   "append": "",
 
-  // write before/after system arrays here to tune the rules
+  // ---------------------------------------------------------------- 调试
+
+  // 填路径导出 before / after / report，调规则用
   "dump": "",
 
+  // 打到 stderr
   "verbose": false
 }
