@@ -115,6 +115,7 @@ export const DEFAULTS = {
   extraParts: [],
   prepend: "",
   prependFile: "",
+  bridge: "",
   append: "",
   dump: "",
   verbose: false,
@@ -242,6 +243,9 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
   return {
     ...merged,
     prepend: persona,
+    // 注入块 = 人格 + 桥接。桥接紧跟在人格后面、别人的提示词前面，用来说明
+    // 「你的声音」和「你的分工」两段设定怎么同时成立，免得两边硬约束互相打架。
+    injection: [persona.trim(), String(merged.bridge ?? "").trim()].filter(Boolean).join("\n\n"),
     personaError,
     personaBytes,
     presetName: PRESETS[merged.preset] ? merged.preset : "identity",
@@ -296,9 +300,9 @@ export function takeover(parts, cfg, report) {
     report.droppedParts.push(`${kind}:${text.slice(0, 60).replace(/\s+/g, " ")}`)
   }
 
-  const prepend = (cfg.prepend ?? "").trim()
+  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
   const append = (cfg.append ?? "").trim()
-  if (prepend) out.unshift({ type: "text", text: prepend })
+  if (injection) out.unshift({ type: "text", text: injection })
   if (append) out.push({ type: "text", text: append })
   return out
 }
@@ -420,12 +424,12 @@ export function purgeSystem(parts, cfg, meta = {}) {
     next.push({ ...part, text: purged })
   }
 
-  const prepend = (cfg.prepend ?? "").trim()
+  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
   const append = (cfg.append ?? "").trim()
   // late 座位启用时 injectInContext 为 false：注入由 late 在拼好的请求体上完成，
   // 这里再做一次会让文本重复。
   if (cfg.injectInContext !== false) {
-    if (prepend) next.unshift({ type: "text", text: prepend })
+    if (injection) next.unshift({ type: "text", text: injection })
     if (append) next.push({ type: "text", text: append })
   }
 
@@ -496,14 +500,16 @@ export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
     slots: slots.map((slot) => slot.path.join(".")),
   }
 
-  const prepend = (cfg.prepend ?? "").trim()
+  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
   const append = (cfg.append ?? "").trim()
 
   if (mode === "prepend") {
-    if (prepend) slots[0].set(`${prepend}\n\n${slots[0].get()}`.trim())
+    // 注入块落在第一个槽位最前面：人格 → 桥接 → 别人的提示词，顺序固定，
+    // 这样「怎么合并」那段一定紧跟在人格后面、在编排规则前面。
+    if (injection) slots[0].set(`${injection}\n\n${slots[0].get()}`.trim())
     const last = slots[slots.length - 1]
     if (append) last.set(`${last.get()}\n\n${append}`.trim())
-    if (prepend) report.injected = prepend.slice(0, 120)
+    if (injection) report.injected = injection.slice(0, 120)
     return report
   }
 
@@ -533,7 +539,7 @@ export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
 
   for (const slot of slots) slot.set(purgeText(slot.get(), cfg, report))
 
-  if (prepend && slots[0]) slots[0].set(`${prepend}\n\n${slots[0].get()}`.trim())
+  if (injection && slots[0]) slots[0].set(`${injection}\n\n${slots[0].get()}`.trim())
   const last = slots[slots.length - 1]
   if (append && last) last.set(`${last.get()}\n\n${append}`.trim())
 

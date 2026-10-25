@@ -4,7 +4,7 @@
 
 [![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-MIT-blue.svg)](LICENSE)
 [![opencode](https://img.shields.io/badge/opencode-1.x%20%7C%202.x-brightgreen)](README.md#兼容性)
-[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-41%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
+[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-43%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
 [![依赖](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-0-blueviolet)](package.json)
 
 opencode 每次请求都会拼一大段 system prompt：身份句、行为守则、工具说明、你的 `AGENTS.md`。这个插件在它发出去之前动手——删掉、换掉，或者整个重写。
@@ -163,6 +163,7 @@ opencode.jsonc 里插件条目的 options         显式传参
 | `preset` | `"identity"` | strip 模式的删减力度，见下 |
 | `prepend` | `""` | 注入到最前面的一段话——**真正决定它怎么说话的就是这个** |
 | `prependFile` | `""` | 整段人格的 markdown 文件，会盖过 `prepend` |
+| `bridge` | `""` | 人格和你宿主/别的插件的角色定义打架时，用来说明怎么合并 |
 | `agents` | `[]` | 只对某些 agent 生效，空 = 全部 |
 | `late` | `true` | 在出站请求上再洗一遍（别的插件抢座位时必需） |
 | `lateMode` | `"inherit"` | `inherit` / `prepend` 只插不删 / `replace` |
@@ -171,7 +172,7 @@ opencode.jsonc 里插件条目的 options         显式传参
 | `dump` | `""` | 填路径导出 before/after，调规则用 |
 | `verbose` | `false` | 打到 stderr |
 
-完整 21 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
+完整 22 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
 
 ### 人格从哪来
 
@@ -193,6 +194,33 @@ node import-persona.mjs --file 我的角色.md
 它从 `~/.deva/personas/` 读原文，剥掉 YAML 头和 `<|im_start|>` 包装，整段写进 `<配置目录>/persona.md`，再把配置里的 `prependFile` 指过去。`DEVA_HOME` 能改来源位置，换台机器也能用。
 
 自己写人格就照 `persona.md` 的结构：身份 → 怎么干活 → 硬约束 → 输出格式。**具体到能量化**，别写「要专业」这种没法执行的。
+
+### 两段设定打架时用 bridge
+
+装上 omo 之后有个更难缠的问题：**它写的角色定义是真的**，不该删。
+
+```
+You are a workflow manager for coding work. ... You are not the default implementation worker.
+Handle work directly only when it is one isolated, clear, low-risk action ...
+Never handle UI/design work directly.
+```
+
+而人格说的是「Execute first」「你产出代码」。两边都是硬约束，同时放在 system 里会互相抵消——实测表现是人格的输出格式整个失效（不再用 `[Y] —` 开头）。
+
+用 `bridge` 在中间说明怎么合并，不删任何一边：
+
+```jsonc
+"bridge": "你收到两段设定：上面是声音与标准，下面是分工规则（你是调度者，这是事实）。\n- 说话方式、产出格式、什么算做完——听上面的\n- 派给哪个子智能体、何时必须委派——听下面的\n- 冲突时分工听下面的，标准听上面的\n- 调度本身就是产出：最后的活由你合成一份完整结果交回"
+```
+
+注入顺序固定为 **人格 → 桥接 → 别人的角色段**，`examples/with-omo.json` 里有可直接用的版本。实测加桥接后人格的开场格式回来了：
+
+| 配置 | 输出 |
+| --- | --- |
+| 人格 + omo 分工 | 直接从「## 原理」开始，`[Y] —` 开场没了 |
+| 人格 + omo 分工 + 桥接 | `[Y] — 登录接口越权修复：先定位授权判断点……` 开场回来，后续按人格的步骤结构走 |
+
+> 这条测的是格式遵循度，不是委派行为。裸 API 调用里没有 subagent 工具，模型没法真的派活——要看委派得在真实会话里试。
 
 ### 预设
 
@@ -321,11 +349,12 @@ designer 等   不被改（lateAgents 拦住）
 ## 开发
 
 ```bash
-node --test test/purge.test.js                    # 41 个用例
+node --test test/purge.test.js                    # 43 个用例
 node check.mjs                                    # 环境检测
 node import-persona.mjs --list                    # 看有哪些角色可导入
 node test/live-ab.mjs deepseek/deepseek-v4-flash  # 拒绝行为 A/B
 node test/live-persona.mjs deepseek/deepseek-v4-flash  # 人格强度 A/B
+node test/live-bridge.mjs deepseek/deepseek-v4-flash   # 桥接是否解决冲突
 ```
 
 无依赖，纯 ESM。

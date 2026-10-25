@@ -1,5 +1,5 @@
 {
-  // 全部 20 个选项。抄一份改，放到 ~/.config/opencode/ds-purge.json
+  // 全部 22 个选项。抄一份改，放到 ~/.config/opencode/ds-purge.json
   // jsonc 语法：注释和尾逗号都能解析。
 
   "enabled": true,
@@ -73,6 +73,13 @@
   // prepend 只作为读不到时的兜底，免得两段人格同时生效互相打架。
   // 用 import-persona.mjs 可以从 Deva 的角色目录直接导入。
   "prependFile": "",
+
+  // 桥接段落，紧跟在人格后面、别人的提示词前面。
+  // 当宿主或别的插件也写了角色定义（例如 oh-my-opencode-slim 的
+  // 「你是调度者，不是默认实现者」），两段硬约束会互相打架——人格要它直接
+  // 产出代码，编排规则要它别自己动手。用它说明两段怎么同时成立，而不是删掉
+  // 任何一边。examples/with-omo.json 里有可直接用的版本。
+  "bridge": "",
 
   // 追加到最后
   "append": "",

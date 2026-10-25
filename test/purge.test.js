@@ -572,6 +572,32 @@ test("中文身份规则只认 AI/助手，不吃掉别的插件的角色句", (
   }
 })
 
+test("桥接跟在人格后面、别人的角色段前面", () => {
+  const cfg = cfgFor({
+    mode: "strip",
+    preset: "identity",
+    late: true,
+    lateMode: "prepend",
+    prepend: "人格段",
+    bridge: "桥接段",
+  })
+
+  const ctx = purgeSystem([{ type: "text", text: "你是调度者，只能派发。" }], cfg, { agent: "orchestrator" })
+  const body = { messages: ctx.parts.map((p) => ({ role: "system", content: p.text })) }
+  rewriteBody(body, cfg, { agent: "orchestrator" }, "prepend")
+
+  const first = body.messages[0].content
+  assert.equal(first.indexOf("人格段") < first.indexOf("桥接段"), true, "人格在前")
+  assert.equal(first.indexOf("桥接段") < first.indexOf("你是调度者"), true, "桥接在别人的角色段之前")
+  assert.equal(first.split("桥接段").length - 1, 1, "桥接只出现一次")
+  assert.equal(first.includes("你是调度者"), true, "别人的角色段要保留")
+})
+
+test("没有 bridge 时注入块就是人格本身", () => {
+  const cfg = cfgFor({ mode: "strip", preset: "identity", late: false, prepend: "只有人格" })
+  assert.equal(cfg.injection, "只有人格")
+})
+
 // 身份句一旦删掉，这个槽位不会保持中性：剩下的文本决定模型怎么自指。下面两个
 // 用例把插件能放进去的两种形态锁住，免得以后改规则时悄悄把「有名字的人格」
 // 变成「没名字的工具」。
