@@ -1,7 +1,7 @@
 {
   "name": "opencode-ds-purge",
   "version": "0.1.0",
-  "description": "Strip role, identity and rule scaffolding from opencode v2 system prompts",
+  "description": "在请求发出之前，重写 opencode 拼给模型的 system prompt：摘掉角色设定、身份句和行为守则",
   "type": "module",
   "main": "src/index.js",
   "exports": {

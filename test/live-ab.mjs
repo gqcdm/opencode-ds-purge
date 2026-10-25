@@ -1,5 +1,5 @@
-// A/B 实测：同一句话，original system vs purge 后的 system，看模型怎么回。
-// 用法：node test/live-ab.mjs [model]
+// A/B 实测：同一句话，原始 system 与清洗后的 system，看模型怎么回。
+// 用法：node test/live-ab.mjs [供应商/模型]
 // 密钥从 ~/.config/opencode/opencode.jsonc 读，不外传。
 
 import fs from "node:fs"

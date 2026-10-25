@@ -1,13 +1,13 @@
 // opencode-ds-purge
-// Strips role / identity / rule scaffolding out of the system prompt that
-// opencode v2 assembles for a session, before it reaches the provider.
+// 在请求发给模型之前，把 opencode v2 为本次会话拼好的 system prompt 里
+// 的角色设定、身份句、行为守则段落摘掉或换掉。
 //
-// Host surface (opencode 2.1.x): a plugin exports { id, setup(ctx) } and
-// registers hooks via ctx.session.hook("<name>", cb). The "context" hook
-// receives the mutable SessionContext:
+// 宿主接口（opencode 2.1.x）：插件导出一个 { id, setup(ctx) }，通过
+// ctx.session.hook("钩子名", 回调) 注册钩子。"context" 钩子拿到的是可修改的
+// SessionContext：
 //   { sessionID, agent, model, system: SystemPart[], messages, options, tools }
 // SystemPart = { type: "text", text, cache?, metadata? }
-// Assigning event.system replaces the array for this request.
+// 给 event.system 重新赋值，就等于替换本次请求的 system。
 
 import fs from "node:fs"
 import os from "node:os"
@@ -15,7 +15,7 @@ import path from "node:path"
 
 export const PLUGIN_ID = "opencode-ds-purge"
 
-// ---------------------------------------------------------------- presets
+// ---------------------------------------------------------------- 预设
 
 const SECTIONS_RULES = [
   /^tone and style$/i,
@@ -48,10 +48,10 @@ const IDENTITY_PATTERNS = [
   /^\s*你(?:是|叫|的名字是)/,
 ]
 
-// AGENTS.md / CLAUDE.md is injected as a system chunk and outranks the host
-// prompt: a persona written there survives every identity rule above unless
-// the plain "You are a <role>" shape is caught too. This one is deliberately
-// broader — it is opt-in through the `agentsMd` switch, not part of a preset.
+// AGENTS.md / CLAUDE.md 是作为一个 system 分段注入的，优先级比宿主提示词更高：
+// 写在那里的人格能躲过上面所有身份规则，除非连 "You are a <角色>" 这种普
+// 通句式也一起认出来。这条正则故意放宽，并且只由 `agentsMd` 开关显式启用，
+// 不属于任何预设。
 const PERSONA_LINE = /^\s*You are (?:a|an|the) [^.\n]{2,120}\.(?:\s*$|[\s\S]*$)/i
 
 const PART_DROP_PATTERNS = [
@@ -89,7 +89,7 @@ export const DEFAULTS = {
   verbose: false,
 }
 
-// --------------------------------------------------------------- utilities
+// --------------------------------------------------------------- 工具函数
 
 export function parseJsonc(text) {
   let out = ""
@@ -162,7 +162,7 @@ function matchesAny(value, list) {
   return false
 }
 
-// Paths, lowest priority first.
+// 配置文件路径，按优先级从低到高排列。
 export function configPaths({ projectDir, homeDir = os.homedir(), env = process.env }) {
   const paths = []
   paths.push(path.join(homeDir, ".config", "opencode", "ds-purge.json"))
@@ -197,9 +197,8 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     ...merged,
     presetName: PRESETS[merged.preset] ? merged.preset : "identity",
     modeName: merged.mode === "replace" ? "replace" : "strip",
-    // When the late seat is armed it injects prepend/append on its own. Doing
-    // it here as well would put the text in twice (once per stage), which the
-    // model reads as two separate instructions.
+    // late 座位启用后，prepend / append 由它自己注入。这里再注入一次会让文本
+    // 出现两遍（每个阶段一遍），模型会当成两条独立的指令来读。
     injectInContext: merged.late !== true,
     replaceKeep: Array.isArray(merged.replaceKeep) ? merged.replaceKeep.map(String) : [],
     lateMode: merged.lateMode === "prepend" || merged.lateMode === "replace" ? merged.lateMode : "inherit",
@@ -215,12 +214,12 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
   }
 }
 
-// ------------------------------------------------------------- part kinds
+// ------------------------------------------------------------- 分块分类
 
-// opencode v2 assembles the system prompt from keyed instruction chunks
-// (core/instructions, core/environment, core/skill-guidance, ...). Anything
-// a plugin or an AGENTS.md adds shows up as another chunk of text, so the
-// chunks have to be told apart before a takeover can decide what survives.
+// opencode v2 的 system prompt 是由一组带键的指令分块拼起来的
+// （core/instructions、core/environment、core/skill-guidance ……）。插件或
+// AGENTS.md 加进来的东西也只是多一个文本块，所以接管之前得先分清每块是什么，
+// 才能决定谁能留下。
 export function classifyPart(text) {
   if (typeof text !== "string" || text.length === 0) return "empty"
   if (/<env>[\s\S]*<\/env>/.test(text)) return "env"
@@ -232,8 +231,8 @@ export function classifyPart(text) {
   return "text"
 }
 
-// Replace mode does not edit the host prompt, it throws it away and sends
-// only the chunks named in replaceKeep plus whatever the user wrote.
+// replace 模式不编辑宿主的提示词，而是整个丢掉，只发 replaceKeep 里点名的
+// 分块，外加用户自己写的内容。
 export function takeover(parts, cfg, report) {
   const keep = new Set(cfg.replaceKeep)
   const out = []
@@ -255,14 +254,13 @@ export function takeover(parts, cfg, report) {
   return out
 }
 
-// ---------------------------------------------------------------- the purge
+// ---------------------------------------------------------------- 清洗主体
 
 const HEADER = /^(#{1,3})\s+(.+?)\s*$/
 const FENCE = /^\s*(```|~~~)/
 
-// Walk the prompt line by line, tracking the header stack, so a dropped
-// section takes its subsections with it. Fenced code is never treated as
-// a header.
+// 逐行扫描提示词，维护一个标题栈，这样砍掉一段就连它的子段一起带走。
+// 代码围栏里的 # 开头行不当标题处理。
 export function stripSections(text, strip, keep, report) {
   const lines = text.split("\n")
   const stack = [] // { header, dropped }
@@ -375,8 +373,8 @@ export function purgeSystem(parts, cfg, meta = {}) {
 
   const prepend = (cfg.prepend ?? "").trim()
   const append = (cfg.append ?? "").trim()
-  // injectInContext is false whenever the late seat is armed: late injects on
-  // the finished request body, and doing it here too would duplicate the text.
+  // late 座位启用时 injectInContext 为 false：注入由 late 在拼好的请求体上完成，
+  // 这里再做一次会让文本重复。
   if (cfg.injectInContext !== false) {
     if (prepend) next.unshift({ type: "text", text: prepend })
     if (append) next.push({ type: "text", text: append })
@@ -385,13 +383,12 @@ export function purgeSystem(parts, cfg, meta = {}) {
   return { parts: next, report }
 }
 
-// ----------------------------------------------------------- the late seat
+// ----------------------------------------------------------- late 座位
 
-// Another plugin can register its own "context" hook after this one and put
-// its identity back into the system array — the orchestrator prompt in
-// oh-my-opencode-slim does exactly that when the agent is "orchestrator".
-// The only seat after that is the outbound request, so the same purge is run
-// once more on the finished JSON body.
+// 别的插件可以在本插件之后注册自己的 "context" 钩子，把它的身份再塞回 system
+// 数组里——oh-my-opencode-slim 在 agent 为 "orchestrator" 时干的就是这件事。
+// 那之后唯一还能写入的位置就是出站请求，所以这里在拼好的 JSON 请求体上
+// 再洗一遍。
 export function systemSlots(body) {
   const slots = []
   if (typeof body?.system === "string") {
@@ -426,13 +423,11 @@ export function systemSlots(body) {
   return slots
 }
 
-// Rewrites the finished request body in place. Returns the report, or null
-// when there was nothing to touch.
+// 原地重写已经拼好的请求体，返回报告；没有可改的地方返回 null。
 //
-// mode: "replace" throws every system slot away and sends the injection plus
-// whatever replaceKeep allows. "prepend" only puts the injection in front of
-// the first slot and leaves everything else alone — that is the shape to use
-// when another plugin's own prompt has to keep working.
+// mode: "replace" 丢掉所有 system 槽位，只发注入内容和 replaceKeep 允许的分块。
+// "prepend" 只把注入内容放到第一个槽位前面，其余原样不动——当别的插件的提示词
+// 必须继续生效时，用这一种。
 export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
   const agent = String(meta.agent ?? "")
   if (cfg.agents.length > 0 && !cfg.agents.includes(agent)) return null
@@ -477,8 +472,8 @@ export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
     }
     if (emptied.size > 0 && Array.isArray(body.messages)) {
       const kept = body.messages.filter((_, i) => !emptied.has(i))
-      // the surviving prompt has to stay first; if every system slot was a
-      // message and all of them emptied, put the injection back in front
+      // 存活下来的提示词必须留在最前面；如果 system 槽位全是 message 而且都被
+      // 清空了，就把注入内容补回开头
       const head = texts.join("\n\n").trim()
       const hasSystemFirst = kept[0]?.role === "system"
       if (head && !hasSystemFirst) kept.unshift({ role: "system", content: head })
@@ -522,13 +517,13 @@ async function rewriteRequest(request, cfg, meta, mode) {
   return { request: next, report }
 }
 
-// ------------------------------------------------------------------ plugin
+// ------------------------------------------------------------------ 插件入口
 
 function describe(report) {
   const total =
     report.sections.length + report.paragraphs.length + report.lines.length + report.droppedParts.length
   if (total === 0) return null
-  return `${PLUGIN_ID}: sections=${report.sections.length} paragraphs=${report.paragraphs.length} lines=${report.lines.length} parts=${report.droppedParts.length}`
+  return `${PLUGIN_ID}: 段落=${report.sections.length} 身份段=${report.paragraphs.length} 行=${report.lines.length} 分块=${report.droppedParts.length}`
 }
 
 function dumpState(dumpPath, payload) {
@@ -546,7 +541,7 @@ export default {
     const cfg = resolveConfig({ options: ctx?.options, projectDir })
 
     if (!cfg.enabled) {
-      if (cfg.verbose) console.error(`[${PLUGIN_ID}] disabled by config`)
+      if (cfg.verbose) console.error(`[${PLUGIN_ID}] 配置里已停用`)
       return () => {}
     }
 
@@ -576,7 +571,7 @@ export default {
           if (line) console.error(`[${PLUGIN_ID}] ${line}`)
         }
       } catch (err) {
-        console.error(`[${PLUGIN_ID}] purge failed, prompt left untouched:`, err?.message ?? err)
+        console.error(`[${PLUGIN_ID}] 清洗失败，提示词保持原样：`, err?.message ?? err)
       }
     })
 
@@ -603,15 +598,15 @@ export default {
             }
             if (cfg.verbose) {
               const line = describe(out.report)
-              if (line) console.error(`[${PLUGIN_ID}] late ${line}`)
+              if (line) console.error(`[${PLUGIN_ID}] late 阶段 ${line}`)
             }
           } catch (err) {
-            console.error(`[${PLUGIN_ID}] late rewrite failed, request left untouched:`, err?.message ?? err)
+            console.error(`[${PLUGIN_ID}] late 重写失败，请求保持原样：`, err?.message ?? err)
           }
         })
         disposers.push(() => lateReg.dispose())
       } catch (err) {
-        console.error(`[${PLUGIN_ID}] http.request hook unavailable, late seat off:`, err?.message ?? err)
+        console.error(`[${PLUGIN_ID}] http.request 钩子不可用，late 座位关闭：`, err?.message ?? err)
       }
     }
 
@@ -625,17 +620,16 @@ export default {
   },
 }
 
-// opencode 1.x loads a plugin as `(input, options) => Hooks` and looks for a
-// named `server` export, with the system prompt arriving as string[] through
-// "experimental.chat.system.transform". Everything below adapts to that shape,
-// in the same file, so the plugin dir holds one loadable module and nothing
-// else — opencode treats every file in that directory as a plugin.
+// opencode 1.x 按 `(input, options) => Hooks` 加载插件，找的是具名导出
+// `server`，system prompt 通过 "experimental.chat.system.transform" 以
+// string[] 的形式交过来。下面这段适配的正是那种形态，并且和主体放在同一个文件
+// 里——插件目录下的每个文件都会被当成独立插件，只放一个可加载模块，别多放。
 
 const v1Log = (cfg, message) => {
   if (cfg.verbose) console.error(`[${PLUGIN_ID}] ${message}`)
 }
 
-// v1 hands over strings, not SystemParts; wrapping them keeps one code path.
+// v1 交过来的是字符串而不是 SystemPart，包一层就能和 v2 共用同一套逻辑。
 const toSystemParts = (system) => (Array.isArray(system) ? system.map((text) => ({ type: "text", text })) : [])
 const toSystemStrings = (parts) =>
   parts.map((part) => part?.text ?? "").filter((text) => text.length > 0)
@@ -646,13 +640,13 @@ export function createV1Plugin(options) {
     const cfg = resolveConfig({ options, projectDir })
 
     if (!cfg.enabled) {
-      v1Log(cfg, "disabled by config")
+      v1Log(cfg, "配置里已停用")
       return {}
     }
 
-    v1Log(cfg, `v1 host, mode=${cfg.modeName}`)
+    v1Log(cfg, `v1 宿主，模式=${cfg.modeName}`)
     if (!cfg.late) {
-      v1Log(cfg, "late is off, and v1 has no outbound-request hook either")
+      v1Log(cfg, "late 已关闭，而且 v1 本来就没有出站请求钩子")
     }
 
     return {
@@ -676,15 +670,15 @@ export function createV1Plugin(options) {
           })
 
           const touched = report.sections.length + report.paragraphs.length + report.lines.length + report.droppedParts.length
-          if (touched > 0) v1Log(cfg, `v1 sections=${report.sections.length} lines=${report.lines.length} parts=${report.droppedParts.length}`)
+          if (touched > 0) v1Log(cfg, `v1 段落=${report.sections.length} 行=${report.lines.length} 分块=${report.droppedParts.length}`)
         } catch (err) {
-          console.error(`[${PLUGIN_ID}] v1 purge failed, prompt left untouched:`, err?.message ?? err)
+          console.error(`[${PLUGIN_ID}] v1 清洗失败，提示词保持原样：`, err?.message ?? err)
         }
       },
     }
   }
 }
 
-// opencode 1.x looks for a named `server` export; 2.x uses `default`. Both
-// shapes live here so one installed file works on either host.
+// opencode 1.x 找具名导出 `server`，2.x 用默认导出。两种形态都留在这个文件里，
+// 这样装一个文件就能在两种宿主上跑。
 export const server = async (input, options) => createV1Plugin(options)(input)

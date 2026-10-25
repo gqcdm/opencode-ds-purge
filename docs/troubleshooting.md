@@ -212,7 +212,7 @@ late 阶段的记录写在 `ds-purge.json.late.json`，带 `report.slots`（在�
 
 **2. 在旧会话里试的。** 重启服务只重载插件，不会重写已经存在的会话。**新开一个对话。**
 
-**3. 有竞争者插件。** 跑 `node check.mjs`，看 `contenders` 这一行。有输出就要 `late: true` + `lateMode: "prepend"`。`install.mjs` 检测到会自动换成 `with-omo` 配置。
+**3. 有竞争者插件。** 跑 `node check.mjs`，看 `竞争者` 这一行。有输出就要 `late: true` + `lateMode: "prepend"`。`install.mjs` 检测到会自动换成 `with-omo` 配置。
 
 **4. 配置没被读到。** 配置在 `setup` 时读一次，改完必须 `opencode service restart`。确认路径：
 

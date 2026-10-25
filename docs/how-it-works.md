@@ -220,12 +220,13 @@ node install.mjs    # 或手动复制 src/index.js
 
 ```
 opencode      opencode v2.1.4
-generation    v2
-config dir    C:\Users\…\.config\opencode
-plugin dir    C:\Users\…\.config\opencode\plugins
-entry shape   default { id, setup }
-late seat     available (http.request)
-installed     opencode-ds-purge.js
+代际          v2
+配置目录      C:\Users\…\.config\opencode
+插件目录      C:\Users\…\.config\opencode\plugins
+入口形态      default { id, setup }
+late 座位     可用（http.request）
+已安装        opencode-ds-purge.js
+竞争者        oh-my-opencode-slim、opencode-dcp ← 它们会在普通 context 钩子之后注入
 ```
 
 ### 移植前确认四件事

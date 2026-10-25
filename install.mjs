@@ -1,15 +1,13 @@
-// Copies the plugin into opencode's plugin directory so it is loaded at
-// startup, and drops a starter config.
+// 把插件复制进 opencode 的插件目录，让它随启动加载，并写一份初始配置。
 //
-//   node install.mjs                       install / update
-//   node install.mjs --with-omo            use the oh-my-opencode-slim friendly preset
-//   node install.mjs --config <file>       copy a specific config file
-//   node install.mjs --uninstall           remove plugin + config
-//   node install.mjs --config-dir <dir>    non-default config dir
+//   node install.mjs                       安装 / 更新
+//   node install.mjs --with-omo            用适配 oh-my-opencode-slim 的配置
+//   node install.mjs --config <文件>       复制指定的配置文件
+//   node install.mjs --uninstall           卸载插件和配置
+//   node install.mjs --config-dir <目录>   指定非默认的配置目录
 //
-// The same file loads on opencode 1.x and 2.x: it exports both the v2
-// default `{ id, setup }` and the v1 `server` function, and each host picks
-// the one it understands.
+// 同一个文件在 opencode 1.x 和 2.x 上都能加载：它同时导出 v2 的默认
+// `{ id, setup }` 和 v1 的 `server` 函数，宿主各取自己认得的那个。
 
 import fs from "node:fs"
 import os from "node:os"
@@ -35,25 +33,24 @@ if (process.argv.includes("--uninstall")) {
   for (const file of [path.join(pluginDir, PLUGIN_FILE), path.join(pluginDir, "opencode-ds-purge.compat.js"), configPath]) {
     if (fs.existsSync(file)) {
       fs.rmSync(file)
-      console.log(`removed  ${file}`)
+      console.log(`已删除  ${file}`)
     }
   }
-  console.log("\nrestart opencode to unload the plugin")
+  console.log("\n重启 opencode 让插件卸载")
   process.exit(0)
 }
 
 if (!fs.existsSync(srcDir)) {
-  console.error(`missing ${srcDir} — run this from the repository root`)
+  console.error(`找不到 ${srcDir} —— 请在仓库根目录运行`)
   process.exit(1)
 }
 
 fs.mkdirSync(pluginDir, { recursive: true })
 
-// One file, no relative imports: opencode treats every file in the plugin
-// directory as a plugin, so a second module there would be loaded on its own
-// and rejected for lacking an entry point.
+// 只放一个文件，不带相对导入：opencode 会把插件目录下的每个文件都当成独立
+// 插件加载，多放一个模块会被单独加载、然后因为缺少入口而被拒。
 fs.copyFileSync(path.join(srcDir, "index.js"), path.join(pluginDir, PLUGIN_FILE))
-console.log(`plugin   -> ${path.join(pluginDir, PLUGIN_FILE)}`)
+console.log(`插件     -> ${path.join(pluginDir, PLUGIN_FILE)}`)
 
 const requested = arg("--config")
 const wantsOmo = process.argv.includes("--with-omo")
@@ -66,18 +63,17 @@ const presetFile = requested
 
 if (presetFile) {
   if (!fs.existsSync(presetFile)) {
-    console.error(`no such config: ${presetFile}`)
+    console.error(`没有这个配置文件：${presetFile}`)
     process.exit(1)
   }
   fs.copyFileSync(presetFile, configPath)
-  const why = wantsOmo ? "--with-omo" : `auto: ${rivals.map((r) => r.name).join(", ")} detected`
-  console.log(`config   -> ${configPath} (from ${path.basename(presetFile)}, ${why})`)
+  const why = wantsOmo ? "--with-omo" : `自动：检测到 ${rivals.map((r) => r.name).join("、")}`
+  console.log(`配置     -> ${configPath}（来自 ${path.basename(presetFile)}，${why}）`)
 } else if (fs.existsSync(configPath)) {
-  console.log(`config   -> ${configPath} (kept as is)`)
+  console.log(`配置     -> ${configPath}（已存在，保持原样）`)
 } else {
-  // A config with no prepend is worse than no plugin at all: the host identity
-  // sentence goes away and nothing replaces it, so the model falls back to its
-  // most conservative default. Ship a prepend the user only has to edit.
+  // 没有 prepend 的配置比不装插件更糟：宿主的身份句被删了却什么都没补上，
+  // 模型会回落到最保守的默认姿态。所以默认就带一份，用户改改就能用。
   fs.writeFileSync(
     configPath,
     JSON.stringify(
@@ -91,11 +87,11 @@ if (presetFile) {
       2,
     ) + "\n",
   )
-  console.log(`config   -> ${configPath}`)
+  console.log(`配置     -> ${configPath}`)
 }
 
-// Re-read what ended up on disk and complain about the two shapes that
-// reliably fail: an empty prepend, and a contender plugin left unguarded.
+// 把落盘后的配置再读一遍，对两种一定会翻车的形态告警：prepend 是空的，
+// 以及有竞争者插件却没开 late 座位。
 let written = {}
 try {
   written = JSON.parse(
@@ -103,23 +99,23 @@ try {
   )
 } catch {}
 
-console.log(`\nhost      ${info.version} (${info.generation}), entry ${info.fromFile}`)
+console.log(`\n宿主      ${info.version}（${info.generation}），入口 ${info.fromFile}`)
 if (!info.lateSeat) {
-  console.log("warning   v1 has no outbound-request hook: other plugins can re-inject after this runs")
+  console.log("警告      v1 没有出站请求钩子，别的插件可以在这之后重新注入")
 }
 
 if (!String(written.prepend ?? "").trim()) {
-  console.log("warning   prepend is empty — the host identity sentence is removed and nothing replaces it,")
-  console.log("          which makes refusals MORE likely, not less. Put your persona in prepend.")
+  console.log("警告      prepend 是空的——宿主的身份句被删掉了，却什么都没补上，")
+  console.log("          这会让拒绝变得更多，而不是更少。把你的设定写进 prepend。")
 }
 if (rivals.length && written.lateMode !== "prepend" && written.mode === "replace") {
-  console.log(`warning   ${rivals.map((r) => r.name).join(", ")} re-injects after a plain context hook.`)
-  console.log('          use "lateMode": "prepend" or you will be overwritten.')
+  console.log(`警告      ${rivals.map((r) => r.name).join("、")} 会在普通 context 钩子之后重新注入。`)
+  console.log('          用 "lateMode": "prepend"，否则你写的内容会被盖掉。')
 }
 if (String(written.prepend ?? "").includes("[名字]")) {
-  console.log("note      prepend still contains the [名字] placeholder — edit ds-purge.json")
+  console.log("提示      prepend 里还留着 [名字] 占位符——去改 ds-purge.json")
 }
 
-console.log("\nnext: restart opencode, then start a NEW conversation")
-console.log("      restarting only reloads the plugin; it does not rewrite sessions that already exist")
+console.log("\n下一步：重启 opencode，然后开一个新对话")
+console.log("        重启只是重新加载插件，不会重写已经存在的会话")
 console.log("  opencode service restart")

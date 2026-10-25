@@ -2,10 +2,10 @@
 
 **在请求离开宿主之前，重写 opencode 拼给模型的 system prompt。**
 
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![opencode](https://img.shields.io/badge/opencode-1.x%20%7C%202.x-brightgreen)](#兼容性)
-[![tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)](test/purge.test.js)
-[![deps](https://img.shields.io/badge/dependencies-0-blueviolet)](package.json)
+[![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-MIT-blue.svg)](LICENSE)
+[![opencode](https://img.shields.io/badge/opencode-1.x%20%7C%202.x-brightgreen)](README.md#兼容性)
+[![测试](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-37%20%E9%80%9A%E8%BF%87-brightgreen)](test/purge.test.js)
+[![依赖](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-0-blueviolet)](package.json)
 
 opencode 每次请求都会拼一大段 system prompt：身份句、行为守则、工具说明、你的 `AGENTS.md`。这个插件在它发出去之前动手——删掉、换掉，或者整个重写。
 
@@ -13,7 +13,7 @@ opencode 每次请求都会拼一大段 system prompt：身份句、行为守则
 
 ---
 
-## 🤖 TO AGENT
+## 🤖 给 AI 智能体
 
 > 读到这里的是 AI agent，用户让你装这个插件 → 照下面做，别多做。
 
@@ -36,7 +36,7 @@ git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && 
 
 ---
 
-## 👤 TO HUMAN
+## 👤 给人看
 
 这东西只做一件事：**在 opencode 把 system prompt 发给模型之前，改写它。**
 
@@ -77,7 +77,7 @@ core/mcp-guidance     675 mcp        →   ✗
 ### 一行
 
 ```bash
-# macOS / Linux / Git Bash
+# macOS / Linux / Git Bash（三平台通用）
 git clone --depth 1 https://github.com/gqcdm/opencode-ds-purge /tmp/ds-purge && node /tmp/ds-purge/install.mjs && opencode service restart
 ```
 
@@ -109,16 +109,16 @@ opencode plugin list           # 应出现 opencode-ds-purge  local
 
 ```
 opencode      opencode v2.1.4
-generation    v2
-config dir    /home/gqcdm/.config/opencode
-plugin dir    /home/gqcdm/.config/opencode/plugins
-entry shape   default { id, setup }
-late seat     available (http.request)
-installed     opencode-ds-purge.js
-contenders    oh-my-opencode-slim, opencode-dcp ← they inject after a plain context hook
+代际          v2
+配置目录      /home/you/.config/opencode
+插件目录      /home/you/.config/opencode/plugins
+入口形态      default { id, setup }
+late 座位     可用（http.request）
+已安装        opencode-ds-purge.js
+竞争者        oh-my-opencode-slim、opencode-dcp ← 它们会在普通 context 钩子之后注入
 ```
 
-`contenders` 那一行很关键。它列出的插件会注册自己的 `context` 钩子并在你之后执行——不处理就会被覆盖。
+`竞争者` 那一行很关键。它列出的插件会注册自己的 `context` 钩子并在你之后执行——不处理就会被覆盖。
 
 ### 手动
 
