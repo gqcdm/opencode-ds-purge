@@ -1,6 +1,7 @@
-// opencode-ds-purge
-// 在请求发给模型之前，把 opencode v2 为本次会话拼好的 system prompt 里
-// 的角色设定、身份句、行为守则段落摘掉或换掉。
+// opencode-ds-purge v0.3
+//
+// 在请求发给模型之前，把 opencode v2 为本次会话拼好的 system prompt 里的
+// 角色设定、身份句、行为守则段落摘掉或换掉，再把人格文件顶到最前面。
 //
 // 宿主接口（opencode 2.1.x）：插件导出一个 { id, setup(ctx) }，通过
 // ctx.session.hook("钩子名", 回调) 注册钩子。"context" 钩子拿到的是可修改的
@@ -8,12 +9,28 @@
 //   { sessionID, agent, model, system: SystemPart[], messages, options, tools }
 // SystemPart = { type: "text", text, cache?, metadata? }
 // 给 event.system 重新赋值，就等于替换本次请求的 system。
+//
+// v2 相对 v1 的改动（都为了「少删错、少重复、可观测」）：
+//   1. 注入幂等：人格指纹已在 system 里就不再插一遍。重试、其他插件回填、
+//      context 与 late 同时命中，都不会出现两段人格互相打架。
+//   2. 标题归一：`## 1. Tone and Style**` / `### 第2章 行为守则：` 这类写法
+//      先归一化再匹配，不会再因为编号、粗体、冒号、setext 下划线漏删。
+//   3. 标题栈修正：`###` 直接跟在 `#` 后面时旧实现会在空位上取 .dropped 抛错，
+//      整段清洗静默失效。现在按「最近的祖先」继承删除状态。
+//   4. 重复分块去重：其他插件把同一段文本灌两遍时只留一份。
+//   5. 体积账本：报告里带 charsBefore / charsAfter / saved，调提示词有数可看。
+//   6. 保护阈值：system 超过 maxChars 直接跳过，不在超大贴码/日志上做正则扫描。
+//   7. dryRun：只出报告不改请求，用来验证规则集。
+//   8. doctor()：一条命令看配置合并结果、人格文件是否可读、有没有写错的键名。
+//
+// 降级原则不变：任何一段清洗抛错，都放行原请求，绝不让插件把会话弄挂。
 
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
 export const PLUGIN_ID = "opencode-ds-purge"
+export const PLUGIN_VERSION = "0.3.0"
 
 // ------------------------------------------------------------- 人格文件
 
@@ -103,6 +120,7 @@ export const DEFAULTS = {
   replaceKeep: [],
   late: true,
   lateMode: "inherit",
+  latePosition: "head",
   lateAgents: [],
   lateKinds: ["primary"],
   agentsMd: false,
@@ -113,6 +131,10 @@ export const DEFAULTS = {
   identityPatterns: [],
   identityReplacement: "",
   extraParts: [],
+  dropEnv: false,
+  dedupeParts: true,
+  maxChars: 1_000_000,
+  dryRun: false,
   prepend: "",
   prependFile: "",
   bridge: "",
@@ -120,6 +142,8 @@ export const DEFAULTS = {
   dump: "",
   verbose: false,
 }
+
+const KNOWN_KEYS = new Set([...Object.keys(DEFAULTS), "injection", "personaBytes"])
 
 // --------------------------------------------------------------- 工具函数
 
@@ -194,6 +218,8 @@ function matchesAny(value, list) {
   return false
 }
 
+const charCount = (text) => (typeof text === "string" ? text.length : 0)
+
 // 配置文件路径，按优先级从低到高排列。
 export function configPaths({ projectDir, homeDir = os.homedir(), env = process.env }) {
   const paths = []
@@ -209,9 +235,13 @@ export function configPaths({ projectDir, homeDir = os.homedir(), env = process.
 
 export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
   const merged = { ...DEFAULTS }
+  const used = []
   for (const file of configPaths({ projectDir, homeDir, env })) {
     const cfg = readConfigFile(file)
-    if (cfg && typeof cfg === "object") Object.assign(merged, cfg)
+    if (cfg && typeof cfg === "object") {
+      Object.assign(merged, cfg)
+      used.push(file)
+    }
   }
   if (options && typeof options === "object") Object.assign(merged, options)
 
@@ -231,14 +261,17 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
   let persona = String(merged.prepend ?? "")
   let personaError = ""
   let personaBytes = Buffer.byteLength(persona)
-  if (merged.prependFile) {
-    const loaded = readPersonaFile(merged.prependFile)
+  const personaFile = merged.prependFile || env?.OPENCODE_DS_PURGE_PERSONA || ""
+  if (personaFile) {
+    const loaded = readPersonaFile(personaFile)
     if (loaded.error) personaError = loaded.error
     else if (loaded.text) {
       persona = loaded.text
       personaBytes = loaded.bytes
     }
   }
+
+  const unknownKeys = Object.keys(merged).filter((key) => !KNOWN_KEYS.has(key))
 
   return {
     ...merged,
@@ -248,6 +281,9 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     injection: [persona.trim(), String(merged.bridge ?? "").trim()].filter(Boolean).join("\n\n"),
     personaError,
     personaBytes,
+    personaFile,
+    configFiles: used,
+    unknownKeys,
     presetName: PRESETS[merged.preset] ? merged.preset : "identity",
     modeName: merged.mode === "replace" ? "replace" : "strip",
     // late 座位启用后，prepend / append 由它自己注入。这里再注入一次会让文本
@@ -255,6 +291,7 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     injectInContext: merged.late !== true,
     replaceKeep: Array.isArray(merged.replaceKeep) ? merged.replaceKeep.map(String) : [],
     lateMode: merged.lateMode === "prepend" || merged.lateMode === "replace" ? merged.lateMode : "inherit",
+    latePosition: merged.latePosition === "tail" ? "tail" : "head",
     lateAgents: Array.isArray(merged.lateAgents) ? merged.lateAgents.map(String) : [],
     lateKinds: Array.isArray(merged.lateKinds) ? merged.lateKinds.map(String) : ["primary"],
     agents: Array.isArray(merged.agents) ? merged.agents.map(String) : [],
@@ -264,6 +301,7 @@ export function resolveConfig({ options, projectDir, homeDir, env } = {}) {
     extraLines: asRegExpList(merged.extraLines),
     dropParts: [...(preset.dropParts ?? []), ...asRegExpList(merged.extraParts)],
     dumpPath: merged.dump || env?.OPENCODE_DS_PURGE_DUMP || "",
+    maxChars: Number.isFinite(Number(merged.maxChars)) && Number(merged.maxChars) > 0 ? Number(merged.maxChars) : DEFAULTS.maxChars,
   }
 }
 
@@ -289,61 +327,109 @@ export function classifyPart(text) {
 export function takeover(parts, cfg, report) {
   const keep = new Set(cfg.replaceKeep)
   const out = []
+  const seen = new Set()
   for (const part of parts) {
     const text = typeof part?.text === "string" ? part.text : ""
     const kind = classifyPart(text)
     report.parts.push({ kind, chars: text.length })
-    if (keep.has(kind) && text) {
-      out.push(part)
+    if (!keep.has(kind) || !text) {
+      report.droppedParts.push(`${kind}:${text.slice(0, 60).replace(/\s+/g, " ")}`)
       continue
     }
-    report.droppedParts.push(`${kind}:${text.slice(0, 60).replace(/\s+/g, " ")}`)
+    if (cfg.dedupeParts && seen.has(text.trim())) {
+      report.droppedParts.push(`${kind}:dup`)
+      continue
+    }
+    seen.add(text.trim())
+    out.push(part)
   }
 
-  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
-  const append = (cfg.append ?? "").trim()
-  if (injection) out.unshift({ type: "text", text: injection })
+  const head = addHead("", cfg)
+  const append = String(cfg.append ?? "").trim()
+  if (head) out.unshift({ type: "text", text: head })
   if (append) out.push({ type: "text", text: append })
   return out
 }
 
 // ---------------------------------------------------------------- 清洗主体
 
-const HEADER = /^(#{1,3})\s+(.+?)\s*$/
 const FENCE = /^\s*(```|~~~)/
+const ATX = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/
+const SETEXT_H1 = /^\s{0,3}=+\s*$/
 
-// 逐行扫描提示词，维护一个标题栈，这样砍掉一段就连它的子段一起带走。
-// 代码围栏里的 # 开头行不当标题处理。
+// 标题匹配前先归一：去编号、去粗体/行内代码、去首尾冒号、压空格。
+// `## 1. Tone and Style**` 与 `## Tone and style:` 归一后都是 "tone and style"。
+export function normalizeHeading(title) {
+  return String(title ?? "")
+    .replace(/^[\s#>*_`]+/, "")
+    .replace(/[\s#:*_`：:、]+$/, "")
+    .replace(/^\(?\d+(?:\.\d+)*[.)、]?\s+/, "")
+    .replace(/^第[一二三四五六七八九十百零\d]+[章节部分]\s*/, "")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+// 逐行扫描提示词，维护一个「层级 → 是否删除」的状态表。砍掉一段连它的子段
+// 一起带走；keep 命中的标题连同子树恢复。缺级标题（`###` 直接跟在 `#` 后面）
+// 按最近的祖先继承，旧实现在空位上取 .dropped 会抛 TypeError 并让整个清洗失效。
 export function stripSections(text, strip, keep, report) {
   const lines = text.split("\n")
-  const stack = [] // { header, dropped }
+  const state = new Map() // level -> dropped
   const out = []
   let fence = false
+  let bodyDropped = false
 
-  for (const line of lines) {
+  const applyHeading = (level, title) => {
+    for (const key of [...state.keys()]) if (key > level) state.delete(key)
+    let inherited = false
+    for (let l = level - 1; l >= 1; l -= 1) {
+      if (state.has(l)) {
+        inherited = state.get(l)
+        break
+      }
+    }
+    const normalized = normalizeHeading(title)
+    const protectedHere = matchesAny(normalized, keep) || matchesAny(String(title).trim(), keep)
+    const dropped = protectedHere ? false : inherited || matchesAny(normalized, strip) || matchesAny(String(title).trim(), strip)
+    state.set(level, dropped)
+    bodyDropped = dropped
+    return dropped
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+
     if (FENCE.test(line)) {
       fence = !fence
-      const blocked = stack.length > 0 && stack[stack.length - 1].dropped
-      if (!blocked) out.push(line)
+      if (!bodyDropped) out.push(line)
       continue
     }
 
-    const m = fence ? null : HEADER.exec(line)
-    if (m) {
-      const level = m[1].length
-      const header = m[2]
-      stack.length = Math.max(0, level - 1)
-      const inherited = stack.length > 0 ? stack[stack.length - 1].dropped : false
-      const protectedHere = matchesAny(header, keep)
-      const dropped = protectedHere ? false : inherited || matchesAny(header, strip)
-      stack[level - 1] = { header, dropped }
-      if (!dropped) out.push(line)
-      else if (report) report.sections.push(header)
-      continue
+    if (!fence) {
+      const atx = ATX.exec(line)
+      if (atx) {
+        const dropped = applyHeading(atx[1].length, atx[2])
+        if (!dropped) out.push(line)
+        else if (report) report.sections.push(String(atx[2]).trim())
+        continue
+      }
+      // setext 一级标题：`Title` + 下一行全 `=`。只认 `=`，不认 `---`——
+      // `---` 在 markdown 里同时是分隔线和 frontmatter 边界，误判会把正文吃掉。
+      const next = lines[i + 1] ?? ""
+      if (line.trim() && SETEXT_H1.test(next)) {
+        const dropped = applyHeading(1, line.trim())
+        if (!dropped) {
+          out.push(line)
+          out.push(next)
+        } else if (report) report.sections.push(line.trim())
+        i += 1
+        continue
+      }
     }
 
-    const blocked = stack.length > 0 && stack[stack.length - 1].dropped
-    if (blocked) continue
+    if (bodyDropped) continue
     out.push(line)
   }
 
@@ -390,23 +476,78 @@ export function purgeText(text, cfg, report) {
   return tidy(out)
 }
 
+// ------------------------------------------------------------- 注入幂等
+
+// 人格指纹：取注入块归一化后的前 48 个字符。够唯一，又不会因为文件尾部
+// 改两个字就整段重插。
+export function injectionKey(cfg) {
+  const text = String(cfg?.injection ?? "").trim()
+  if (text.length < 16) return ""
+  return text.replace(/\s+/g, " ").slice(0, 48)
+}
+
+export function hasInjection(text, key) {
+  if (!key) return false
+  return String(text ?? "").replace(/\s+/g, " ").includes(key)
+}
+
+function addHead(text, cfg) {
+  const injection = String(cfg?.injection ?? "").trim()
+  if (!injection) return text
+  if (hasInjection(text, cfg?.injectionKey ?? injectionKey(cfg))) return text
+  return `${injection}\n\n${text}`.trim()
+}
+
+function addTail(text, cfg) {
+  const append = String(cfg?.append ?? "").trim()
+  if (!append) return text
+  return `${text}\n\n${append}`.trim()
+}
+
 export function purgeSystem(parts, cfg, meta = {}) {
-  const report = { agent: meta.agent, mode: cfg.modeName, sections: [], paragraphs: [], lines: [], droppedParts: [], parts: [] }
+  const report = {
+    agent: meta.agent,
+    mode: cfg.modeName,
+    sections: [],
+    paragraphs: [],
+    lines: [],
+    droppedParts: [],
+    parts: [],
+    charsBefore: 0,
+    charsAfter: 0,
+    saved: 0,
+  }
   if (!Array.isArray(parts)) return { parts, report }
 
   if (cfg.agents.length > 0 && !cfg.agents.includes(String(meta.agent ?? ""))) {
     return { parts, report, skipped: "agent" }
   }
 
-  if (cfg.modeName === "replace") {
-    return { parts: takeover(parts, cfg, report), report }
+  report.charsBefore = parts.reduce((sum, part) => sum + charCount(part?.text), 0)
+  if (report.charsBefore > cfg.maxChars) {
+    report.charsAfter = report.charsBefore
+    return { parts, report, skipped: "too-large" }
   }
 
+  if (cfg.modeName === "replace") {
+    const next = takeover(parts, cfg, report)
+    report.charsAfter = next.reduce((sum, part) => sum + charCount(part?.text), 0)
+    report.saved = report.charsBefore - report.charsAfter
+    return { parts: next, report }
+  }
+
+  const key = injectionKey(cfg)
+  const seen = new Set()
   const next = []
   for (const part of parts) {
     const text = part?.text
     if (typeof text !== "string") {
       next.push(part)
+      continue
+    }
+
+    if (cfg.dropEnv && classifyPart(text) === "env") {
+      report.droppedParts.push(`env:${text.slice(0, 60).replace(/\s+/g, " ")}`)
       continue
     }
 
@@ -416,23 +557,44 @@ export function purgeSystem(parts, cfg, meta = {}) {
     }
 
     const purged = purgeText(text, cfg, report)
-    if (purged === text) {
-      next.push(part)
+    if (!purged.trim()) {
+      report.droppedParts.push(`emptied:${text.slice(0, 60).replace(/\s+/g, " ")}`)
       continue
     }
-    if (!purged.trim()) continue
-    next.push({ ...part, text: purged })
+
+    if (cfg.dedupeParts) {
+      const flat = purged.trim()
+      if (seen.has(flat)) {
+        report.droppedParts.push(`dup:${flat.slice(0, 60).replace(/\s+/g, " ")}`)
+        continue
+      }
+      seen.add(flat)
+    }
+
+    if (purged === text) next.push(part)
+    else next.push({ ...part, text: purged })
   }
 
-  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
-  const append = (cfg.append ?? "").trim()
   // late 座位启用时 injectInContext 为 false：注入由 late 在拼好的请求体上完成，
   // 这里再做一次会让文本重复。
+  //
+  // 注入保持「独立分块」而不是并进第一个分块：缓存边界干净，模型也能把它当成
+  // 一段独立设定来读。重复注入由人格指纹挡住。
   if (cfg.injectInContext !== false) {
-    if (injection) next.unshift({ type: "text", text: injection })
-    if (append) next.push({ type: "text", text: append })
+    const head = String(cfg.injection ?? "").trim()
+    if (head) {
+      const present = key ? next.some((part) => typeof part?.text === "string" && hasInjection(part.text, key)) : false
+      if (!present) next.unshift({ type: "text", text: head })
+      else report.injected = "skipped:already-present"
+    }
+    if (cfg.append) {
+      const tail = String(cfg.append).trim()
+      if (tail) next.push({ type: "text", text: tail })
+    }
   }
 
+  report.charsAfter = next.reduce((sum, part) => sum + charCount(part?.text), 0)
+  report.saved = report.charsBefore - report.charsAfter
   return { parts: next, report }
 }
 
@@ -498,25 +660,35 @@ export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
     droppedParts: [],
     parts: [],
     slots: slots.map((slot) => slot.path.join(".")),
+    charsBefore: slots.reduce((sum, slot) => sum + slot.get().length, 0),
+    charsAfter: 0,
+    saved: 0,
   }
 
-  const injection = (cfg.injection ?? cfg.prepend ?? "").trim()
-  const append = (cfg.append ?? "").trim()
+  const key = injectionKey(cfg)
+  const position = cfg.latePosition === "tail" ? slots.length - 1 : 0
 
   if (mode === "prepend") {
-    // 注入块落在第一个槽位最前面：人格 → 桥接 → 别人的提示词，顺序固定，
+    // 注入块落在指定槽位最前面：人格 → 桥接 → 别人的提示词，顺序固定，
     // 这样「怎么合并」那段一定紧跟在人格后面、在编排规则前面。
-    if (injection) slots[0].set(`${injection}\n\n${slots[0].get()}`.trim())
+    const head = String(cfg.injection ?? "").trim()
+    if (head && !hasInjection(slots[position].get(), key)) {
+      slots[position].set(`${head}\n\n${slots[position].get()}`.trim())
+      report.injected = head.slice(0, 120)
+    } else if (head) {
+      report.injected = "skipped:already-present"
+    }
     const last = slots[slots.length - 1]
-    if (append) last.set(`${last.get()}\n\n${append}`.trim())
-    if (injection) report.injected = injection.slice(0, 120)
+    if (cfg.append) last.set(addTail(last.get(), cfg))
+    report.charsAfter = slots.reduce((sum, slot) => sum + slot.get().length, 0)
+    report.saved = report.charsBefore - report.charsAfter
     return report
   }
 
   if (mode === "replace") {
     const parts = slots.map((slot) => ({ type: "text", text: slot.get() }))
     const result = purgeSystem(parts, cfg, meta)
-    for (const key of ["sections", "paragraphs", "lines", "droppedParts", "parts"]) report[key] = result.report[key]
+    for (const field of ["sections", "paragraphs", "lines", "droppedParts", "parts"]) report[field] = result.report[field]
 
     const texts = result.parts.map((part) => part.text).filter((text) => text.trim().length > 0)
     slots.forEach((slot, i) => slot.set(i === 0 ? texts.join("\n\n") : ""))
@@ -534,15 +706,22 @@ export function rewriteBody(body, cfg, meta = {}, mode = cfg.modeName) {
       if (head && !hasSystemFirst) kept.unshift({ role: "system", content: head })
       body.messages = kept
     }
+    report.charsAfter = slots.reduce((sum, slot) => sum + slot.get().length, 0)
+    report.saved = report.charsBefore - report.charsAfter
     return report
   }
 
   for (const slot of slots) slot.set(purgeText(slot.get(), cfg, report))
 
-  if (injection && slots[0]) slots[0].set(`${injection}\n\n${slots[0].get()}`.trim())
+  if (cfg.injection) {
+    const target = slots[position]
+    if (target) target.set(addHead(target.get(), cfg))
+  }
   const last = slots[slots.length - 1]
-  if (append && last) last.set(`${last.get()}\n\n${append}`.trim())
+  if (cfg.append && last) last.set(addTail(last.get(), cfg))
 
+  report.charsAfter = slots.reduce((sum, slot) => sum + slot.get().length, 0)
+  report.saved = report.charsBefore - report.charsAfter
   return report
 }
 
@@ -578,7 +757,8 @@ function describe(report) {
   const total =
     report.sections.length + report.paragraphs.length + report.lines.length + report.droppedParts.length
   if (total === 0) return null
-  return `${PLUGIN_ID}: 段落=${report.sections.length} 身份段=${report.paragraphs.length} 行=${report.lines.length} 分块=${report.droppedParts.length}`
+  const saved = Number.isFinite(report.saved) ? ` 省=${report.saved}B` : ""
+  return `${PLUGIN_ID}: 段落=${report.sections.length} 身份段=${report.paragraphs.length} 行=${report.lines.length} 分块=${report.droppedParts.length}${saved}`
 }
 
 function dumpState(dumpPath, payload) {
@@ -587,6 +767,99 @@ function dumpState(dumpPath, payload) {
     fs.mkdirSync(path.dirname(dumpPath), { recursive: true })
     fs.writeFileSync(dumpPath, JSON.stringify(payload, null, 2))
   } catch {}
+}
+
+// 一条命令看清插件当前状态：读了哪些配置、人格文件是否可读、预设/模式、
+// 有没有写错的键名。不启动宿主也能跑：
+//   node -e "import('.../opencode-ds-purge.js').then(m=>console.log(m.doctor()))"
+export function doctor({ options, projectDir, homeDir, env } = {}) {
+  const cfg = resolveConfig({ options, projectDir, homeDir, env })
+  return {
+    plugin: PLUGIN_ID,
+    version: PLUGIN_VERSION,
+    enabled: cfg.enabled,
+    preset: cfg.presetName,
+    mode: cfg.modeName,
+    late: cfg.late,
+    lateMode: cfg.lateMode,
+    lateAgents: cfg.lateAgents,
+    agents: cfg.agents,
+    configFiles: cfg.configFiles,
+    personaFile: cfg.personaFile,
+    personaError: cfg.personaError || null,
+    personaBytes: cfg.personaBytes,
+    injectionChars: cfg.injection.length,
+    stripSections: cfg.stripSections.length,
+    identityPatterns: cfg.identity.length,
+    keepSections: cfg.keepSections.length,
+    dropParts: cfg.dropParts.length,
+    maxChars: cfg.maxChars,
+    dedupeParts: cfg.dedupeParts,
+    unknownKeys: cfg.unknownKeys,
+  }
+}
+
+// 规则集自检：喂固定样例，断言该删的删了、该留的留着。改完正则跑一次，
+// 比在宿主里靠眼睛看 dump 快得多。
+export function selfTest(cfgOverrides = {}) {
+  // 自检必须与真实配置隔离：否则本机 ds-purge.json 里的 prependFile 会把
+  // 夹具人格顶掉，断言就变成在测另一份配置。
+  const cfg = resolveConfig({
+    options: { preset: "rules", late: false, prepend: "PERSONA-HEAD-MARKER-0123456789", ...cfgOverrides },
+    projectDir: "",
+    homeDir: path.join(os.tmpdir(), "opencode-ds-purge-selftest-none"),
+    env: {},
+  })
+  const checks = []
+  const check = (name, ok, detail = "") => checks.push({ name, ok: Boolean(ok), detail })
+
+  const section = purgeText("# Title\n\n## Tone and style\nBe brief.\n\n## 1. Behavior**\nDo not lie.\n\n## Custom\nKeep me.\n", cfg, { sections: [], paragraphs: [], lines: [], droppedParts: [] })
+  check("atx 段落被删", !/Be brief/.test(section), section.slice(0, 60))
+  check("编号+粗体标题被归一后删掉", !/Do not lie/.test(section), section.slice(0, 60))
+  check("未命中的段落保留", /Keep me/.test(section))
+  check("正文标题行保留", /# Title/.test(section))
+
+  const gapReport = { sections: [], paragraphs: [], lines: [], droppedParts: [] }
+  const gap = stripSections("# Behavior\nsecret\n### Deep\nmore secret\n", cfg.stripSections, [], gapReport)
+  check("缺级标题不抛错", typeof gap === "string")
+  check("缺级标题继承祖先删除状态", !/more secret/.test(gap), JSON.stringify(gap))
+
+  const keepReport = { sections: [], paragraphs: [], lines: [], droppedParts: [] }
+  const withKeep = stripSections("## Behavior\nsecret\n## Behavior\npublic\n", cfg.stripSections, [/^behavior$/i], keepReport)
+  check("keepSections 覆盖删除规则", /secret/.test(withKeep) && /public/.test(withKeep), JSON.stringify(withKeep))
+
+  const identity = purgeText("You are an AI assistant that edits code.\n\n保持工程简洁。\n", cfg, { sections: [], paragraphs: [], lines: [], droppedParts: [] })
+  check("身份句被删", !/You are an AI assistant/.test(identity))
+  check("中文正文不被误删", /保持工程简洁/.test(identity))
+
+  const parts = [
+    { type: "text", text: "## Behavior\nbe nice\n" },
+    { type: "text", text: "keep this part\n" },
+  ]
+  const once = purgeSystem(parts, cfg, { agent: "build" })
+  const twice = purgeSystem(once.parts, cfg, { agent: "build" })
+  const markerCount = (list) => list.filter((part) => String(part?.text ?? "").includes("PERSONA-HEAD-MARKER")).length
+  check("注入落到第一个分块", markerCount(once.parts) === 1)
+  check("二次清洗不重复注入", markerCount(twice.parts) === 1, `count=${markerCount(twice.parts)}`)
+
+  const deduped = purgeSystem([{ type: "text", text: "same\n" }, { type: "text", text: "same\n" }], cfg, { agent: "build" })
+  check(
+    "重复分块去重",
+    deduped.parts.filter((part) => String(part?.text ?? "").includes("same")).length === 1 &&
+      deduped.report.droppedParts.some((item) => item.startsWith("dup:")),
+    JSON.stringify(deduped.parts.map((p) => p.text)),
+  )
+
+  const big = purgeSystem([{ type: "text", text: "x".repeat(50) }], { ...cfg, maxChars: 10 }, { agent: "build" })
+  check("超限跳过", big.skipped === "too-large")
+
+  const body = { system: "## Behavior\nbe nice\n", messages: [] }
+  rewriteBody(body, { ...cfg, lateAgents: [] }, { agent: "build" }, "prepend")
+  const firstLen = body.system.length
+  rewriteBody(body, { ...cfg, lateAgents: [] }, { agent: "build" }, "prepend")
+  check("出站重写幂等", body.system.length === firstLen && body.system.split("PERSONA-HEAD-MARKER").length - 1 === 1)
+
+  return { ok: checks.every((item) => item.ok), checks }
 }
 
 export default {
@@ -600,37 +873,59 @@ export default {
       return () => {}
     }
 
-    const reg = await ctx.session.hook("context", async (event) => {
-      try {
-        if (!event || !Array.isArray(event.system)) return
-        const before = event.system.map((part) => part?.text ?? "")
-        const result = purgeSystem(event.system, cfg, { agent: event.agent })
-        if (result.skipped) return
-        event.system = result.parts
+    if (cfg.verbose) {
+      const where = cfg.configFiles.length ? cfg.configFiles.join(",") : "默认值"
+      console.error(
+        `[${PLUGIN_ID}] v${PLUGIN_VERSION} preset=${cfg.presetName} mode=${cfg.modeName} late=${cfg.late ? cfg.lateMode : "off"} agents=${cfg.lateAgents.join("|") || "*"} persona=${cfg.personaBytes}B 配置=${where}`,
+      )
+      if (cfg.personaError) console.error(`[${PLUGIN_ID}] 人格文件读不到：${cfg.personaError}`)
+      if (cfg.unknownKeys.length) console.error(`[${PLUGIN_ID}] 配置里有未知键：${cfg.unknownKeys.join(", ")}`)
+    }
 
-        if (cfg.dumpPath) {
-          dumpState(cfg.dumpPath, {
-            at: new Date().toISOString(),
-            sessionID: event.sessionID,
-            agent: event.agent,
-            model: event.model,
-            preset: cfg.presetName,
-            mode: cfg.modeName,
-            before,
-            after: result.parts.map((part) => part?.text ?? ""),
-            report: result.report,
-          })
-        }
-        if (cfg.verbose) {
-          const line = describe(result.report)
-          if (line) console.error(`[${PLUGIN_ID}] ${line}`)
-        }
-      } catch (err) {
-        console.error(`[${PLUGIN_ID}] 清洗失败，提示词保持原样：`, err?.message ?? err)
-      }
-    })
+    const disposers = []
 
-    const disposers = [() => reg.dispose()]
+    // context 钩子：v2 宿主一定有；缺失时记一条，别让插件整块挂掉。
+    try {
+      const reg = await ctx.session.hook("context", async (event) => {
+        try {
+          if (!event) return
+          const isArray = Array.isArray(event.system)
+          if (!isArray && typeof event.system !== "string") return
+          const parts = isArray ? event.system : [{ type: "text", text: event.system }]
+          const before = parts.map((part) => part?.text ?? "")
+          const result = purgeSystem(parts, cfg, { agent: event.agent })
+          if (result.skipped) return
+          if (cfg.dryRun) {
+            if (cfg.verbose) console.error(`[${PLUGIN_ID}] dryRun ${describe(result.report) ?? "无改动"}`)
+            return
+          }
+          event.system = isArray ? result.parts : result.parts.map((part) => part?.text ?? "").join("\n\n")
+
+          if (cfg.dumpPath) {
+            dumpState(cfg.dumpPath, {
+              at: new Date().toISOString(),
+              sessionID: event.sessionID,
+              agent: event.agent,
+              model: event.model,
+              preset: cfg.presetName,
+              mode: cfg.modeName,
+              before,
+              after: result.parts.map((part) => part?.text ?? ""),
+              report: result.report,
+            })
+          }
+          if (cfg.verbose) {
+            const line = describe(result.report)
+            if (line) console.error(`[${PLUGIN_ID}] ${line}`)
+          }
+        } catch (err) {
+          console.error(`[${PLUGIN_ID}] 清洗失败，提示词保持原样：`, err?.message ?? err)
+        }
+      })
+      disposers.push(() => reg.dispose())
+    } catch (err) {
+      console.error(`[${PLUGIN_ID}] context 钩子不可用：`, err?.message ?? err)
+    }
 
     if (cfg.late) {
       try {
@@ -641,7 +936,7 @@ export default {
             const lateMode = cfg.lateMode === "inherit" ? cfg.modeName : cfg.lateMode
             const out = await rewriteRequest(event.request, cfg, { agent: event.agent }, lateMode)
             if (!out) return
-            event.request = out.request
+            if (!cfg.dryRun) event.request = out.request
             if (cfg.dumpPath) {
               dumpState(cfg.dumpPath.replace(/\.json$/, "") + ".late.json", {
                 at: new Date().toISOString(),
@@ -692,7 +987,10 @@ const toSystemStrings = (parts) =>
 export function createV1Plugin(options) {
   return async (input) => {
     const projectDir = input?.directory ?? input?.project?.worktree ?? process.cwd()
-    const cfg = resolveConfig({ options, projectDir })
+    const base = resolveConfig({ options, projectDir })
+    // v1 没有出站请求钩子，late 座位在这条路径上不存在。不改这个开关的话，
+    // late:true 的配置会让 context 注入也被关掉，人格在 v1 上等于整段丢失。
+    const cfg = base.late && !base.injectInContext ? { ...base, injectInContext: true } : base
 
     if (!cfg.enabled) {
       v1Log(cfg, "配置里已停用")
@@ -711,7 +1009,7 @@ export function createV1Plugin(options) {
           const before = [...output.system]
           const { parts, report, skipped } = purgeSystem(toSystemParts(output.system), cfg, { agent: args?.agent })
           if (skipped) return
-          output.system = toSystemStrings(parts)
+          if (!cfg.dryRun) output.system = toSystemStrings(parts)
 
           if (cfg.dumpPath) dumpState(cfg.dumpPath, {
             at: new Date().toISOString(),

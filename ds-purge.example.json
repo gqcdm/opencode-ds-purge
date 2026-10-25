@@ -1,5 +1,5 @@
 {
-  // 全部 22 个选项。抄一份改，放到 ~/.config/opencode/ds-purge.json
+  // 全部 27 个选项。抄一份改，放到 ~/.config/opencode/ds-purge.json
   // jsonc 语法：注释和尾逗号都能解析。
 
   "enabled": true,
@@ -26,6 +26,10 @@
 
   // inherit 跟随 mode | prepend 只插入不删除 | replace 丢掉重拼
   "lateMode": "inherit",
+
+  // 注入落在第几个槽位：head = 第一个，tail = 最后一个。
+  // 别的插件把重要设定放在末尾时，用 tail 把它留在前面。
+  "latePosition": "head",
 
   // late 只作用于这些 agent，空 = 全部。
   // 配合 omo 时建议 ["orchestrator"]，排掉 designer / fixer 等子智能体。
@@ -57,6 +61,16 @@
   // 额外整段丢弃的 part（正则）
   "extraParts": [],
 
+  // 同一段文本被灌两遍时只留一份。别的插件重复注入同一段提示词时会显得啰嗦，
+  // 但又不影响语义，默认开。
+  "dedupeParts": true,
+
+  // 连 <env> 环境段一起丢。默认关：环境段里通常有 cwd 和平台信息，工具会用。
+  "dropEnv": false,
+
+  // system 超过这个字符数就整段跳过，不在超大贴码 / 日志上跑正则。
+  "maxChars": 1000000,
+
   // 额外当身份句处理的正则
   "identityPatterns": [],
 
@@ -85,6 +99,9 @@
   "append": "",
 
   // ---------------------------------------------------------------- 调试
+
+  // 只出报告、不改请求。调规则时先干跑一遍，确认该删的删了再关掉。
+  "dryRun": false,
 
   // 填路径导出 before / after / report，调规则用
   "dump": "",

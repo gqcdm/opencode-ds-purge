@@ -6,13 +6,16 @@ import test from "node:test"
 
 import plugin, {
   classifyPart,
+  doctor,
   configPaths,
   parseJsonc,
   purgeSystem,
   purgeText,
   readPersonaFile,
   resolveConfig,
+  normalizeHeading,
   rewriteBody,
+  selfTest,
   stripSections,
   systemSlots,
 } from "../src/index.js"
@@ -621,3 +624,130 @@ for (const name of ["persona", "silent"]) {
     assert.equal(joined.split(cfg.prepend.trim()).length - 1, 1, "prepend 只能出现一次")
   })
 }
+
+// ---------------------------------------------------------------- v0.3 回归
+
+// 宿主提示词的标题不总是干净的 `## Tone and style`。编号、粗体、冒号、中文
+// 章节号都会出现，归一步骤把它们压成同一形状再做匹配。
+test("标题归一：编号、粗体、冒号、中文章节号都能命中", () => {
+  assert.equal(normalizeHeading("1. Tone and Style**"), "tone and style")
+  assert.equal(normalizeHeading("Tone and style:"), "tone and style")
+  assert.equal(normalizeHeading("**Behavior**："), "behavior")
+  assert.equal(normalizeHeading("第2章 行为守则"), "行为守则")
+  assert.equal(normalizeHeading("### Tool Usage Policy"), "tool usage policy")
+})
+
+test("编号+粗体的规则标题会被删掉，正文标题保留", () => {
+  const cfg = cfgFor({ preset: "rules" })
+  const text = "# Title\n\n## Tone and Style\nBe brief.\n\n## 1. Proactiveness**\nNever ask.\n\n## Project\nKeep me."
+  const out = purgeText(text, cfg, { sections: [], paragraphs: [], lines: [], droppedParts: [] })
+  assert.doesNotMatch(out, /Be brief/)
+  assert.doesNotMatch(out, /Never ask/)
+  assert.match(out, /Keep me/)
+  assert.match(out, /# Title/)
+})
+
+// 旧实现在缺级标题上取空位 .dropped 会抛 TypeError，被上层 catch 吞掉，
+// 表现为「整段清洗静默失效」。这个用例同时锁住不抛错和祖先继承。
+test("缺级标题不抛错，并且继承祖先的删除状态", () => {
+  const cfg = cfgFor({ preset: "rules" })
+  const rep = { sections: [], paragraphs: [], lines: [], droppedParts: [] }
+  const out = stripSections("# Behavior\nsecret\n### Deep\nmore secret\n", cfg.stripSections, [], rep)
+  assert.equal(typeof out, "string")
+  // 命中规则的标题自身也被摘掉，所以整段（含缺级的 ### Deep 子树）都是空的
+  assert.doesNotMatch(out, /secret/)
+  assert.equal(rep.sections.includes("Deep"), true)
+})
+
+test("人格指纹：同一个注入块不会插第二次", () => {
+  const persona = "PERSONA-HEAD-MARKER-0123456789 这是一段足够长的人格设定，用来做指纹。"
+  const cfg = cfgFor({ preset: "identity", late: false, prepend: persona })
+  const first = purgeSystem([{ type: "text", text: "# A\nx" }], cfg, { agent: "build" })
+  assert.equal(first.parts[0].text, persona)
+
+  const second = purgeSystem(first.parts, cfg, { agent: "build" })
+  const count = second.parts.filter((part) => String(part.text).includes("PERSONA-HEAD-MARKER")).length
+  assert.equal(count, 1)
+})
+
+test("重复分块只留一份", () => {
+  const cfg = cfgFor({ preset: "identity", late: false })
+  const { parts, report } = purgeSystem(
+    [
+      { type: "text", text: "# Same\nbody" },
+      { type: "text", text: "# Same\nbody" },
+    ],
+    cfg,
+    { agent: "build" },
+  )
+  assert.equal(parts.length, 1)
+  assert.equal(report.droppedParts.some((item) => item.startsWith("dup:")), true)
+})
+
+test("dedupeParts 关掉后重复分块保留", () => {
+  const cfg = cfgFor({ preset: "identity", late: false, dedupeParts: false })
+  const { parts } = purgeSystem(
+    [
+      { type: "text", text: "# Same\nbody" },
+      { type: "text", text: "# Same\nbody" },
+    ],
+    cfg,
+    { agent: "build" },
+  )
+  assert.equal(parts.length, 2)
+})
+
+test("超过 maxChars 时整段跳过，不动提示词", () => {
+  const cfg = cfgFor({ preset: "rules", maxChars: 10 })
+  const parts = [{ type: "text", text: "## Tone and style\n应该是这样".repeat(20) }]
+  const { parts: out, skipped } = purgeSystem(parts, cfg, { agent: "build" })
+  assert.equal(skipped, "too-large")
+  assert.equal(out[0], parts[0])
+})
+
+test("报告带体积账本", () => {
+  const cfg = cfgFor({ preset: "rules", late: false })
+  const { report } = purgeSystem([{ type: "text", text: "## Tone and style\nBe brief please.\n\n## X\nkeep" }], cfg, {
+    agent: "build",
+  })
+  assert.ok(report.charsBefore > report.charsAfter)
+  assert.equal(report.saved, report.charsBefore - report.charsAfter)
+})
+
+test("出站重写在 prepend 模式下重复调用不叠加", () => {
+  const persona = "PERSONA-HEAD-MARKER-0123456789"
+  const cfg = cfgFor({ preset: "identity", late: true, lateMode: "prepend", lateAgents: [], prepend: persona })
+  const body = { system: "You are opencode.", messages: [] }
+  rewriteBody(body, cfg, { agent: "build" }, "prepend")
+  const once = body.system
+  rewriteBody(body, cfg, { agent: "build" }, "prepend")
+  assert.equal(body.system, once)
+  assert.equal(body.system.split("PERSONA-HEAD-MARKER").length - 1, 1)
+})
+
+test("latePosition=tail 把注入放到最后一个槽位", () => {
+  const persona = "PERSONA-HEAD-MARKER-0123456789"
+  const cfg = cfgFor({ latePosition: "tail", lateMode: "prepend", lateAgents: [], prepend: persona })
+  const body = { system: ["first", "second"], messages: [] }
+  rewriteBody(body, cfg, { agent: "build" }, "prepend")
+  assert.equal(body.system[0], "first")
+  assert.match(body.system[1], /PERSONA-HEAD-MARKER/)
+})
+
+test("doctor() 给出配置来源、人格字节数和未知键", () => {
+  const info = doctor({ projectDir: here, homeDir: "/nonexistent", env: {} })
+  assert.equal(info.plugin, "opencode-ds-purge")
+  assert.equal(info.preset, "identity")
+  assert.equal(typeof info.personaBytes, "number")
+  assert.equal(Array.isArray(info.unknownKeys), true)
+
+  const bad = doctor({ projectDir: here, homeDir: "/nonexistent", env: {}, options: { presetTypo: 1 } })
+  assert.equal(bad.unknownKeys.includes("presetTypo"), true)
+})
+
+test("selfTest() 全绿", () => {
+  const result = selfTest()
+  const failed = result.checks.filter((check) => !check.ok)
+  assert.deepEqual(failed, [])
+  assert.equal(result.ok, true)
+})

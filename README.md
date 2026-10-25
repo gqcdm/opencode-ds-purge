@@ -167,12 +167,17 @@ opencode.jsonc 里插件条目的 options         显式传参
 | `agents` | `[]` | 只对某些 agent 生效，空 = 全部 |
 | `late` | `true` | 在出站请求上再洗一遍（别的插件抢座位时必需） |
 | `lateMode` | `"inherit"` | `inherit` / `prepend` 只插不删 / `replace` |
+| `latePosition` | `"head"` | 注入落在第一个槽位；`tail` 落到最后一个 |
 | `lateAgents` | `[]` | late 只作用于这些 agent |
 | `agentsMd` | `false` | 额外摘掉 `AGENTS.md` 里 `You are a …` 那种人格句 |
+| `dedupeParts` | `true` | 同一段文本被灌两遍时只留一份 |
+| `dropEnv` | `false` | 连 `<env>` 环境段一起丢 |
+| `maxChars` | `1000000` | system 超过这个长度就整段跳过，不在超大贴码上跑正则 |
+| `dryRun` | `false` | 只出报告、不改请求，用来验证规则集 |
 | `dump` | `""` | 填路径导出 before/after，调规则用 |
 | `verbose` | `false` | 打到 stderr |
 
-完整 22 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
+完整 27 项见 [`ds-purge.example.json`](ds-purge.example.json)——每一项都带注释，抄一份改就行。
 
 ### 人格从哪来
 
@@ -312,6 +317,8 @@ designer 等   不被改（lateAgents 拦住）
 
 > v1 没有出站钩子。如果对方也用 omo 这类会抢座位的插件，**v1 上无解**——时序上必然被覆盖，只能改方向：`mode: "strip"` + 别用 orchestrator。
 
+v0.3 起，v1 路径会自动把 `injectInContext` 打开：v1 没有 late 座位，如果不补这一步，`late: true` 的配置会连 context 注入一起关掉，人格在 v1 上等于整段丢失。
+
 移植到别人的机器、配置目录差异、其他注入方排查：[移植指南](docs/how-it-works.md)
 
 ## 排错速查
@@ -338,6 +345,22 @@ designer 等   不被改（lateAgents 拦住）
 
 要稳定拿到某种风格：`prepend` 写清楚要什么，比删干净有效。
 
+插件只动 system prompt 这一个面：**不判断目标、不设网段白名单、没有会话门禁**。它不拦公网、不拦内网、不拦任何任务类别，也没有技能库/知识库开关——要不要做某件事，由配置里的人格和宿主的工具权限决定，不由这个插件决定。
+
+## 变更
+
+### 0.3.0
+
+- **注入幂等**：人格指纹（归一化前 48 字）已在 system 里就不再插。重试、其他插件回填、context 与 late 双命中都不会出现两段人格。
+- **标题归一**：`## 1. Tone and Style**`、`### 第2章 行为守则：` 先归一化再匹配——编号、粗体、中英文冒号、setext 的 `===` 都能命中，不再漏删。
+- **标题栈修正**：`###` 直接跟在 `#` 后面时，旧实现会在空位上读 `.dropped` 抛 TypeError，被上层 catch 吞掉，表现为整段清洗静默失效。现在按最近的祖先继承删除状态。
+- **重复分块去重**（`dedupeParts`）、**env 段开关**（`dropEnv`）、**体积闸**（`maxChars`）、**干跑**（`dryRun`）。
+- **体积账本**：报告里带 `charsBefore` / `charsAfter` / `saved`。
+- **`doctor()`**：一条命令看配置来源、人格文件可读性、人格字节数、写错的键名。
+- **`selfTest()`**：14 条断言，改正则后先跑它。
+- **v1 注入修复**：v1 没有出站钩子，`late: true` 会把 context 注入一起关掉，人格整段丢失。现在 v1 路径强制 `injectInContext`。
+- `OPENCODE_DS_PURGE_PERSONA` 可覆盖人格文件路径。
+
 ## 文档
 
 | | |
@@ -349,12 +372,15 @@ designer 等   不被改（lateAgents 拦住）
 ## 开发
 
 ```bash
-node --test test/purge.test.js                    # 43 个用例
+node --test test/purge.test.js                    # 55 个用例
 node check.mjs                                    # 环境检测
 node import-persona.mjs --list                    # 看有哪些角色可导入
 node test/live-ab.mjs deepseek/deepseek-v4-flash  # 拒绝行为 A/B
 node test/live-persona.mjs deepseek/deepseek-v4-flash  # 人格强度 A/B
 node test/live-bridge.mjs deepseek/deepseek-v4-flash   # 桥接是否解决冲突
+
+node -e "import('./src/index.js').then(m => console.log(m.doctor()))"   # 当前配置合并结果
+node -e "import('./src/index.js').then(m => console.log(m.selfTest().ok))"  # 规则集自检
 ```
 
 无依赖，纯 ESM。

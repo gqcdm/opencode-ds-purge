@@ -1,6 +1,6 @@
 {
   "name": "opencode-ds-purge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "在请求发出之前，重写 opencode 拼给模型的 system prompt：摘掉角色设定、身份句和行为守则，换成你自己的人格",
   "type": "module",
   "main": "src/index.js",
